@@ -1,0 +1,120 @@
+from dataclasses import dataclass, field
+from typing import Optional
+import json
+
+
+@dataclass
+class ArchetypeConfig:
+    """Parameter ranges for one agent archetype.
+
+    Each *_range is a (min, max) tuple used to draw that strategy parameter
+    from a uniform distribution.  Param order matches K=8 layout:
+      aggression, mean_reversion, trend_follow, noise_scale,
+      ema_alpha, fair_value_lr, position_limit, risk_aversion
+    """
+    name: str
+    weight: float  # fraction of total agents (all weights should sum to ~1.0)
+    aggression_range: tuple = (0.1, 0.5)
+    mean_reversion_range: tuple = (0.0, 0.5)
+    trend_follow_range: tuple = (0.0, 0.5)
+    noise_scale_range: tuple = (0.05, 0.3)
+    ema_alpha_range: tuple = (0.01, 0.2)
+    fair_value_lr_range: tuple = (0.001, 0.02)
+    position_limit_range: tuple = (10.0, 100.0)
+    risk_aversion_range: tuple = (0.01, 0.2)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "weight": self.weight,
+            "aggression": list(self.aggression_range),
+            "mean_reversion": list(self.mean_reversion_range),
+            "trend_follow": list(self.trend_follow_range),
+            "noise_scale": list(self.noise_scale_range),
+            "ema_alpha": list(self.ema_alpha_range),
+            "fair_value_lr": list(self.fair_value_lr_range),
+            "position_limit": list(self.position_limit_range),
+            "risk_aversion": list(self.risk_aversion_range),
+        }
+
+
+# Canonical archetypes matching main.rs defaults.
+MEAN_REVERTER = ArchetypeConfig(
+    name="mean_reverter", weight=0.3,
+    aggression_range=(0.1, 0.5),
+    mean_reversion_range=(0.3, 0.8),
+    trend_follow_range=(0.0, 0.0),
+    noise_scale_range=(0.05, 0.2),
+    ema_alpha_range=(0.01, 0.1),
+    fair_value_lr_range=(0.001, 0.01),
+    position_limit_range=(10.0, 100.0),
+    risk_aversion_range=(0.01, 0.1),
+)
+
+TREND_FOLLOWER = ArchetypeConfig(
+    name="trend_follower", weight=0.3,
+    aggression_range=(0.1, 0.5),
+    mean_reversion_range=(0.0, 0.0),
+    trend_follow_range=(0.2, 0.7),
+    noise_scale_range=(0.05, 0.2),
+    ema_alpha_range=(0.01, 0.1),
+    fair_value_lr_range=(0.001, 0.01),
+    position_limit_range=(10.0, 100.0),
+    risk_aversion_range=(0.01, 0.1),
+)
+
+MARKET_MAKER = ArchetypeConfig(
+    name="market_maker", weight=0.2,
+    aggression_range=(0.02, 0.1),
+    mean_reversion_range=(0.1, 0.3),
+    trend_follow_range=(0.0, 0.0),
+    noise_scale_range=(0.05, 0.2),
+    ema_alpha_range=(0.01, 0.1),
+    fair_value_lr_range=(0.001, 0.01),
+    position_limit_range=(5.0, 20.0),
+    risk_aversion_range=(0.05, 0.2),
+)
+
+NOISE_TRADER = ArchetypeConfig(
+    name="noise_trader", weight=0.2,
+    aggression_range=(0.1, 0.5),
+    mean_reversion_range=(0.0, 0.0),
+    trend_follow_range=(0.0, 0.0),
+    noise_scale_range=(0.5, 2.0),
+    ema_alpha_range=(0.01, 0.1),
+    fair_value_lr_range=(0.001, 0.01),
+    position_limit_range=(10.0, 100.0),
+    risk_aversion_range=(0.01, 0.1),
+)
+
+DEFAULT_ARCHETYPES = [MEAN_REVERTER, TREND_FOLLOWER, MARKET_MAKER, NOISE_TRADER]
+
+
+@dataclass
+class SimConfig:
+    n_agents: int = 10_000
+    initial_price: float = 100.0
+    initial_cash: float = 10_000.0
+    k: int = 8
+    m: int = 4
+    use_gpu: bool = True
+    seed: Optional[int] = 42
+    fair_value_vol: float = 0.002
+    init_bias: float = 0.02
+    archetypes: Optional[list] = field(default_factory=lambda: list(DEFAULT_ARCHETYPES))
+
+    def to_json(self) -> str:
+        d = {
+            "n_agents": self.n_agents,
+            "initial_price": self.initial_price,
+            "initial_cash": self.initial_cash,
+            "k": self.k,
+            "m": self.m,
+            "use_gpu": self.use_gpu,
+            "seed": self.seed,
+            "fair_value_vol": self.fair_value_vol,
+            "init_bias": self.init_bias,
+        }
+        if self.archetypes is not None:
+            d["archetypes"] = [a.to_dict() for a in self.archetypes]
+        return json.dumps(d)

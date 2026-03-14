@@ -19,3 +19,27 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+
+# Added by cargo
+/target
+
+# Compiled Python extension modules
+**/*.so
+**/*.pyd
+
+# Maturin / wheel build artifacts
+dist/
+wheels/
+*.whl
+
+# Large binary / data files
+*.bin
+*.npy
+*.npz
+*.pt
+*.onnx
+*.safetensors
+
+# PDF spec docs (large, not source)
+*.pdf

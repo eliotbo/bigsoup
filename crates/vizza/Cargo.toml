@@ -1,0 +1,21 @@
+[package]
+name = "vizza"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winit = "0.30"
+wgpu = "23.0"
+lod = { path = "../lod" }
+bytemuck = { version = "1.0", features = ["derive"] }
+glyphon = "0.7.0"
+wgpu-profiler = { version = "0.18", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+anyhow = "1.0"
+pollster = "0.3"
+chrono = { version = "0.4" }
+chrono-tz = "0.10"
+
+[dev-dependencies]
+rand = "0.8"

@@ -1,0 +1,37 @@
+[package]
+name = "lod"
+version = "0.1.0"
+edition = "2021"
+authors = ["eliot.bolduc@gmail.com"]
+description = "Level-of-detail aggregation and caching for multi-resolution data pipelines"
+license = "All rights reserved"
+
+[dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+chrono-tz = "0.8"
+
+# Optional dependencies
+rayon = { version = "1.10", optional = true }
+memmap2 = { version = "0.9", optional = true }
+zerocopy = { version = "0.7", features = ["derive"], optional = true }
+
+# Development dependencies for benchmarks
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1.5"
+rand = "0.8"
+tempfile = "3.8"
+
+[features]
+default = []
+parallel-build = ["rayon"]
+bench = []
+mmap = ["memmap2", "zerocopy"]
+
+# Benchmarks can be added later
+# [[bench]]
+# name = "aggregator"
+# harness = false
