@@ -117,7 +117,7 @@ fn main() {
 
     let use_gpu = config.use_gpu.unwrap_or(true);
     let engine: Box<dyn econsim::engine::SimEngine> = if use_gpu {
-        match CudaEngine::new(0, &agents) {
+        match CudaEngine::new(0, &agents, None) {
             Ok(e) => Box::new(e),
             Err(err) => {
                 eprintln!("CUDA unavailable ({err}), falling back to CPU");

@@ -23,4 +23,10 @@ pub trait SimEngine: Send {
         bbo: &BBO,
         order_buffer: &mut Vec<Order>,
     ) -> (usize, GpuStepTimings);
+
+    /// Recompile the kernel with a new signal expression (DSL).
+    /// Only supported by CudaEngine; CpuEngine returns an error.
+    fn reload_kernel(&mut self, _signal_expr: &str) -> Result<(), Box<dyn std::error::Error>> {
+        Err("kernel reload not supported on this engine".into())
+    }
 }

@@ -7,8 +7,14 @@ use crate::market::types::{BBO, Order};
 use super::{GpuStepTimings, SimEngine};
 
 const KERNEL_SRC: &str = include_str!("../../kernels/decide.cu");
+const TEMPLATE_SRC: &str = include_str!("../../kernels/decide_template.cu");
+
+/// Default signal expression matching the hardcoded logic in decide.cu.
+const DEFAULT_SIGNAL_EXPR: &str =
+    "(fair_value_estimate - mid) * mean_reversion + (mid - ema) * trend_follow + noise + (-risk_aversion * pos)";
 
 pub struct CudaEngine {
+    ctx: Arc<CudaContext>,
     stream: Arc<CudaStream>,
     d_position: CudaSlice<f32>,
     d_cash: CudaSlice<f32>,
@@ -24,13 +30,28 @@ pub struct CudaEngine {
 }
 
 impl CudaEngine {
-    pub fn new(device_id: usize, agents: &AgentState) -> Result<Self, Box<dyn std::error::Error>> {
+    /// Substitute `signal_expr` into the kernel template and compile via NVRTC.
+    pub fn compile_kernel(ctx: &Arc<CudaContext>, template: &str, signal_expr: &str) -> Result<CudaFunction, Box<dyn std::error::Error>> {
+        let src = template.replace("{{SIGNAL_EXPR}}", signal_expr);
+        let ptx = compile_ptx(&src)?;
+        let module = ctx.load_module(ptx)?;
+        let func = module.load_function("agent_decide")?;
+        Ok(func)
+    }
+
+    pub fn new(device_id: usize, agents: &AgentState, signal_expr: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
         let ctx = CudaContext::new(device_id)?;
         let stream = ctx.default_stream();
 
-        let ptx = compile_ptx(KERNEL_SRC)?;
-        let module = ctx.load_module(ptx)?;
-        let func = module.load_function("agent_decide")?;
+        let func = match signal_expr {
+            Some(expr) => Self::compile_kernel(&ctx, TEMPLATE_SRC, expr)?,
+            None => {
+                // Use the original kernel for exact backward compatibility
+                let ptx = compile_ptx(KERNEL_SRC)?;
+                let module = ctx.load_module(ptx)?;
+                module.load_function("agent_decide")?
+            }
+        };
 
         let n = agents.n;
         let k = agents.k;
@@ -50,6 +71,7 @@ impl CudaEngine {
         stream.synchronize()?;
 
         Ok(Self {
+            ctx,
             stream,
             d_position,
             d_cash,
@@ -165,5 +187,11 @@ impl SimEngine for CudaEngine {
             download: download_time,
         };
         (self.n, gpu_timings)
+    }
+
+    fn reload_kernel(&mut self, signal_expr: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let func = Self::compile_kernel(&self.ctx, TEMPLATE_SRC, signal_expr)?;
+        self.func = func;
+        Ok(())
     }
 }

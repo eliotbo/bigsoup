@@ -79,7 +79,7 @@ impl PySimulation {
 
         let use_gpu = config.use_gpu.unwrap_or(true);
         let engine: Box<dyn crate::engine::SimEngine> = if use_gpu {
-            let cuda_engine = crate::engine::cuda_engine::CudaEngine::new(0, &agents)
+            let cuda_engine = crate::engine::cuda_engine::CudaEngine::new(0, &agents, None)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Box::new(cuda_engine)
         } else {
@@ -121,6 +121,14 @@ impl PySimulation {
 
     fn tick(&self) -> u64 {
         self.inner.tick
+    }
+
+    /// Recompile and hot-swap the CUDA kernel with a new signal expression.
+    /// The expression should be a C float expression string produced by
+    /// `econsim.dsl.compile()`.
+    fn set_strategy(&mut self, signal_expr: &str) -> PyResult<()> {
+        self.inner.engine.reload_kernel(signal_expr)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 }
 
