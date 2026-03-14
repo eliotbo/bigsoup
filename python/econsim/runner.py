@@ -77,3 +77,24 @@ if __name__ == "__main__":
     print(f'price std:    {r["price_std"]:.4f}')
     print(f'total volume: {r["total_volume"]:.0f}')
     print(f'bbo:          {r["bbo"]}')
+
+    # --- DSL example: generalized sigmoid desirability curve ---
+    from dsl import Param, State, BboField, Noise, Position, Abs, Exp, signal, compile
+
+    mr = Param("mean_reversion") * (State("fair_value_estimate") - BboField("mid"))
+    tf = Param("trend_follow") * (BboField("mid") - State("ema"))
+    raw = mr + tf + Noise() + (-Param("risk_aversion") * Position())
+    desirability = 1.0 / (1.0 + Exp(Param("curvature") * (Abs(Position()) - Param("midpoint"))))
+    expr = signal(raw * desirability)
+    c_str = compile(expr)
+
+    print(f'\nDSL signal: {c_str}')
+
+    config = SimConfig(n_agents=10_000)
+    sim = PySimulation(config.to_json())
+    sim.set_strategy(c_str)
+    sim.run(1000)
+
+    prices = np.asarray(sim.price_history())
+    print(f'DSL final price:  {prices[-1]:.4f}')
+    print(f'DSL price std:    {prices.std():.4f}')

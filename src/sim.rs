@@ -55,7 +55,7 @@ impl Default for SimConfig {
             n_agents: 100_000,
             initial_price: 100.0,
             initial_cash: 10_000.0,
-            k: 8,
+            k: 10,
             m: 4,
             use_gpu: Some(true),
             seed: None,

@@ -4,7 +4,7 @@ use econsim::sim::{SimConfig, Simulation};
 use rand::SeedableRng;
 
 fn make_simulation(n_agents: usize, seed: u64) -> Simulation {
-    let k = 8;
+    let k = 10;
     let m = 4;
     let initial_price = 100.0;
 
@@ -23,9 +23,10 @@ fn make_simulation(n_agents: usize, seed: u64) -> Simulation {
     }
 
     // Simple mixed params
-    let dists: [(f32, f32); 8] = [
+    let dists: [(f32, f32); 10] = [
         (0.05, 0.5), (0.0, 0.5), (0.0, 0.5), (0.1, 1.0),
         (0.01, 0.1), (0.001, 0.01), (10.0, 100.0), (0.01, 0.1),
+        (0.5, 2.0), (5.0, 50.0),
     ];
     for i in 0..n_agents {
         for p in 0..k {

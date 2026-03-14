@@ -52,31 +52,32 @@ mod tests {
 
     #[test]
     fn test_new_allocates_zeroed() {
-        let state = AgentState::new(100, 8, 4);
+        let state = AgentState::new(100, 10, 4);
         assert_eq!(state.n, 100);
         assert_eq!(state.position.len(), 100);
         assert_eq!(state.cash.len(), 100);
-        assert_eq!(state.strategy_params.len(), 800);
+        assert_eq!(state.strategy_params.len(), 1000);
         assert_eq!(state.internal_state.len(), 400);
         assert!(state.position.iter().all(|&v| v == 0.0));
     }
 
     #[test]
     fn test_get_set_param() {
-        let mut state = AgentState::new(10, 8, 4);
+        let mut state = AgentState::new(10, 10, 4);
         state.set_param(3, 5, 42.0);
         assert_eq!(state.get_param(3, 5), 42.0);
         // Verify it's at the right index in the flat array
-        assert_eq!(state.strategy_params[3 * 8 + 5], 42.0);
+        assert_eq!(state.strategy_params[3 * 10 + 5], 42.0);
     }
 
     #[test]
     fn test_randomize_params() {
-        let mut state = AgentState::new(1000, 8, 4);
+        let mut state = AgentState::new(1000, 10, 4);
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
         let dists = vec![
             (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0),
             (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0),
+            (0.0, 1.0), (0.0, 1.0),
         ];
         state.randomize_params(&mut rng, &dists);
         // All values should be in [0, 1]

@@ -5,7 +5,7 @@ which is substituted into the CUDA kernel template.
 
 Available named inputs:
   Param:    aggression, mean_reversion, trend_follow, noise_scale,
-            ema_alpha, fair_value_lr, position_limit, risk_aversion
+            ema_alpha, fair_value_lr, position_limit, risk_aversion, curvature, midpoint
   State:    fair_value_estimate, ema, prev_mid
   BboField: mid, spread
   Noise():  pre-computed LCG noise (scaled by noise_scale * spread)
@@ -80,11 +80,12 @@ class Const(Expr):
 
 
 class Param(Expr):
-    """Reference a strategy parameter by name (K=8 layout)."""
+    """Reference a strategy parameter by name (K=10 layout)."""
 
     VALID = frozenset({
         "aggression", "mean_reversion", "trend_follow", "noise_scale",
         "ema_alpha", "fair_value_lr", "position_limit", "risk_aversion",
+        "curvature", "midpoint",
     })
 
     def __init__(self, name):
@@ -199,6 +200,16 @@ class Abs(Expr):
 
     def to_c(self):
         return f"fabsf({self.expr.to_c()})"
+
+
+class Exp(Expr):
+    """Exponential: expf(expr) in CUDA C."""
+
+    def __init__(self, expr):
+        self.expr = _wrap(expr)
+
+    def to_c(self):
+        return f"expf({self.expr.to_c()})"
 
 
 # --- Clamp ---

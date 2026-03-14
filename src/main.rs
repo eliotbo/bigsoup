@@ -10,7 +10,7 @@ fn main() {
         n_agents: 100_000,
         initial_price: 100.0,
         initial_cash: 10_000.0,
-        k: 8,
+        k: 10,
         m: 4,
         use_gpu: Some(true),
         seed: Some(42),
@@ -55,6 +55,8 @@ fn main() {
             fair_value_lr:  (0.001, 0.01),
             position_limit: (10.0, 100.0),
             risk_aversion:  (0.01, 0.1),
+            curvature:      (0.5, 1.5),
+            midpoint:       (5.0, 20.0),
         },
         Archetype {
             name: "trend_follower".to_string(), weight: 0.3,
@@ -66,6 +68,8 @@ fn main() {
             fair_value_lr:  (0.001, 0.01),
             position_limit: (10.0, 100.0),
             risk_aversion:  (0.01, 0.1),
+            curvature:      (0.5, 1.5),
+            midpoint:       (15.0, 50.0),
         },
         Archetype {
             name: "market_maker".to_string(), weight: 0.2,
@@ -77,6 +81,8 @@ fn main() {
             fair_value_lr:  (0.001, 0.01),
             position_limit: (5.0, 20.0),
             risk_aversion:  (0.05, 0.2),
+            curvature:      (0.8, 1.2),
+            midpoint:       (3.0, 10.0),
         },
         Archetype {
             name: "noise_trader".to_string(), weight: 0.2,
@@ -88,6 +94,8 @@ fn main() {
             fair_value_lr:  (0.001, 0.01),
             position_limit: (10.0, 100.0),
             risk_aversion:  (0.01, 0.1),
+            curvature:      (0.5, 2.0),
+            midpoint:       (10.0, 50.0),
         },
     ];
 

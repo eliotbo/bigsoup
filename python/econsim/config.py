@@ -8,9 +8,9 @@ class ArchetypeConfig:
     """Parameter ranges for one agent archetype.
 
     Each *_range is a (min, max) tuple used to draw that strategy parameter
-    from a uniform distribution.  Param order matches K=8 layout:
+    from a uniform distribution.  Param order matches K=10 layout:
       aggression, mean_reversion, trend_follow, noise_scale,
-      ema_alpha, fair_value_lr, position_limit, risk_aversion
+      ema_alpha, fair_value_lr, position_limit, risk_aversion, curvature, midpoint
     """
     name: str
     weight: float  # fraction of total agents (all weights should sum to ~1.0)
@@ -22,6 +22,8 @@ class ArchetypeConfig:
     fair_value_lr_range: tuple = (0.001, 0.02)
     position_limit_range: tuple = (10.0, 100.0)
     risk_aversion_range: tuple = (0.01, 0.2)
+    curvature_range: tuple = (0.5, 2.0)
+    midpoint_range: tuple = (5.0, 50.0)
 
     def to_dict(self) -> dict:
         return {
@@ -35,6 +37,8 @@ class ArchetypeConfig:
             "fair_value_lr": list(self.fair_value_lr_range),
             "position_limit": list(self.position_limit_range),
             "risk_aversion": list(self.risk_aversion_range),
+            "curvature": list(self.curvature_range),
+            "midpoint": list(self.midpoint_range),
         }
 
 
@@ -49,6 +53,8 @@ MEAN_REVERTER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(10.0, 100.0),
     risk_aversion_range=(0.01, 0.1),
+    curvature_range=(0.5, 1.5),
+    midpoint_range=(5.0, 20.0),
 )
 
 TREND_FOLLOWER = ArchetypeConfig(
@@ -61,6 +67,8 @@ TREND_FOLLOWER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(10.0, 100.0),
     risk_aversion_range=(0.01, 0.1),
+    curvature_range=(0.5, 1.5),
+    midpoint_range=(15.0, 50.0),
 )
 
 MARKET_MAKER = ArchetypeConfig(
@@ -73,6 +81,8 @@ MARKET_MAKER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(5.0, 20.0),
     risk_aversion_range=(0.05, 0.2),
+    curvature_range=(0.8, 1.2),
+    midpoint_range=(3.0, 10.0),
 )
 
 NOISE_TRADER = ArchetypeConfig(
@@ -85,6 +95,8 @@ NOISE_TRADER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(10.0, 100.0),
     risk_aversion_range=(0.01, 0.1),
+    curvature_range=(0.5, 2.0),
+    midpoint_range=(10.0, 50.0),
 )
 
 DEFAULT_ARCHETYPES = [MEAN_REVERTER, TREND_FOLLOWER, MARKET_MAKER, NOISE_TRADER]
@@ -95,7 +107,7 @@ class SimConfig:
     n_agents: int = 10_000
     initial_price: float = 100.0
     initial_cash: float = 10_000.0
-    k: int = 8
+    k: int = 10
     m: int = 4
     use_gpu: bool = True
     seed: Optional[int] = 42

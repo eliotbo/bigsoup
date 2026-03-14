@@ -143,6 +143,8 @@ fn default_param_distributions() -> Vec<(f32, f32)> {
         (0.001, 0.01), // fair_value_lr
         (10.0, 100.0), // position_limit
         (0.01, 0.1),   // risk_aversion
+        (0.5, 2.0),    // curvature
+        (5.0, 50.0),   // midpoint
     ]
 }
 

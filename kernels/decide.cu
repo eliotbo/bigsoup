@@ -1,6 +1,6 @@
 // CUDA kernel mirroring cpu_engine.rs logic exactly.
-// Param layout (K=8): aggression, mean_reversion, trend_follow, noise_scale,
-//                     ema_alpha, fair_value_lr, position_limit, risk_aversion
+// Param layout (K=10): aggression, mean_reversion, trend_follow, noise_scale,
+//                      ema_alpha, fair_value_lr, position_limit, risk_aversion, curvature, midpoint
 // Internal state layout (M=4): fair_value_estimate, ema, prev_mid, rng_state
 
 extern "C" __global__ void agent_decide(
@@ -30,6 +30,8 @@ extern "C" __global__ void agent_decide(
     float fair_value_lr  = strategy_params[i * K + 5];
     float position_limit = strategy_params[i * K + 6];
     float risk_aversion  = strategy_params[i * K + 7];
+    float curvature      = strategy_params[i * K + 8];
+    float midpoint       = strategy_params[i * K + 9];
 
     // --- Load internal state ---
     float fair_est = internal_state[i * M + 0];

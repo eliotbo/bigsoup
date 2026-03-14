@@ -28,6 +28,8 @@ impl SimEngine for CpuEngine {
             let fair_value_lr  = agents.strategy_params[i * k + 5];
             let position_limit = agents.strategy_params[i * k + 6];
             let risk_aversion  = agents.strategy_params[i * k + 7];
+            let _curvature     = agents.strategy_params[i * k + 8];
+            let _midpoint      = agents.strategy_params[i * k + 9];
 
             // --- Load internal state ---
             let mut fair_est = agents.internal_state[i * m + 0];
