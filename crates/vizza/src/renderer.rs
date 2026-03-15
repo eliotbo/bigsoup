@@ -26,7 +26,8 @@ pub struct Renderer {
     viewport_views: Vec<ViewportView>,
     last_live_tick: Instant,
 
-    // Glyphon for text rendering
+    // Glyphon for text rendering — held for lifetime management
+    #[allow(dead_code)]
     glyphon_cache: glyphon::Cache,
     glyphon_viewport: glyphon::Viewport,
 
@@ -222,6 +223,7 @@ impl Renderer {
                     viewport_h,
                     market_data,
                     initial_left_ts,
+                    vizza_config.default_lod_level,
                 );
 
                 state.view_settings = base_view_settings.clone();
@@ -539,6 +541,7 @@ impl Renderer {
                     viewport_h,
                     market_data,
                     initial_left_ts,
+                    vizza_config.default_lod_level,
                 );
 
                 state.view_settings = base_view_settings.clone();
@@ -918,7 +921,7 @@ impl Renderer {
         let bar_index = (bar_position + 1) as usize;
 
         // Verify the bar index is within the visible range
-        if let Some((candles, start_idx, end_idx)) = state.get_visible_candle_range() {
+        if let Some((_candles, start_idx, end_idx)) = state.get_visible_candle_range() {
             let visible_count = end_idx.saturating_sub(start_idx);
             if bar_index < visible_count {
                 Some(bar_index)

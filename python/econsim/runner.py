@@ -11,12 +11,6 @@ The .so lands in python/econsim/ automatically.  Then run:
 
     PYTHONPATH=python python3 python/econsim/runner.py
 
-Quick start (in a script):
-
-    from econsim.runner import run_simulation
-    results = run_simulation(n_ticks=1000)
-    print(results["prices"][-1])
-
 Custom archetypes:
 
     from econsim import SimConfig, MEAN_REVERTER, NOISE_TRADER
@@ -40,6 +34,8 @@ Return value of run_simulation:
     }
 """
 
+import os
+import subprocess
 import numpy as np
 
 if __name__ == "__main__":
@@ -48,6 +44,22 @@ if __name__ == "__main__":
 else:
     from .config import SimConfig
     from .econsim import PySimulation
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def show_chart(config: SimConfig = None, n_ticks: int = 10_000, strategy: str = None):
+    """Launch the vizza candlestick chart for a simulation run."""
+    if config is None:
+        config = SimConfig()
+    args = [
+        "cargo", "run", "--bin", "chart", "--",
+        "--ticks", str(n_ticks),
+        "--config", config.to_json(),
+    ]
+    if strategy is not None:
+        args += ["--strategy", strategy]
+    subprocess.run(args, cwd=_REPO_ROOT)
 
 
 def run_simulation(config: SimConfig = None, n_ticks: int = 1000) -> dict:
@@ -72,29 +84,15 @@ def run_simulation(config: SimConfig = None, n_ticks: int = 1000) -> dict:
 
 
 if __name__ == "__main__":
-    r = run_simulation(n_ticks=10000)
-    print(f'final price:  {r["final_price"]:.4f}')
-    print(f'price std:    {r["price_std"]:.4f}')
-    print(f'total volume: {r["total_volume"]:.0f}')
-    print(f'bbo:          {r["bbo"]}')
-
-    # --- DSL example: generalized sigmoid desirability curve ---
     from dsl import Param, State, BboField, Noise, Position, Abs, Exp, signal, compile
 
     mr = Param("mean_reversion") * (State("fair_value_estimate") - BboField("mid"))
     tf = Param("trend_follow") * (BboField("mid") - State("ema"))
     raw = mr + tf + Noise() + (-Param("risk_aversion") * Position())
     desirability = 1.0 / (1.0 + Exp(Param("curvature") * (Abs(Position()) - Param("midpoint"))))
-    expr = signal(raw * desirability)
-    c_str = compile(expr)
+    c_str = compile(signal(raw * desirability))
 
-    print(f'\nDSL signal: {c_str}')
+    print(f'DSL signal: {c_str}')
 
-    config = SimConfig(n_agents=10_000)
-    sim = PySimulation(config.to_json())
-    sim.set_strategy(c_str)
-    sim.run(1000)
-
-    prices = np.asarray(sim.price_history())
-    print(f'DSL final price:  {prices[-1]:.4f}')
-    print(f'DSL price std:    {prices.std():.4f}')
+    config = SimConfig()
+    show_chart(config, n_ticks=100_000, strategy=c_str)

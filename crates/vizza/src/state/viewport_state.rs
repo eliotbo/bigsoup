@@ -65,14 +65,18 @@ impl ViewportState {
         height: f32,
         market_data: &MarketData,
         initial_left_ts: Option<i64>,
+        default_lod_level: LodLevel,
     ) -> Self {
         let (data_start_utc, data_end_utc) = market_data.time_range();
 
         let mut zoom = ZoomX::default();
         // Set the minimum LOD level based on data granularity
         zoom.set_min_lod_from_interval(market_data.min_interval_secs);
-        // Default to the finest available interval so historical data is visible immediately
-        zoom.current_lod_level = zoom.min_lod_level();
+        // Apply the requested default LOD level, clamped to the finest available
+        let all = LodLevel::all_levels();
+        let min_idx = all.iter().position(|&l| l == zoom.min_lod_level()).unwrap_or(0);
+        let default_idx = all.iter().position(|&l| l == default_lod_level).unwrap_or(0);
+        zoom.current_lod_level = all[default_idx.max(min_idx)];
 
         // Calculate viewport_right_ts based on initial_left_ts
         // If no initial position specified, show most recent data (right edge at data_end)

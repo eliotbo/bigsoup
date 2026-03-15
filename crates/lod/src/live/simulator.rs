@@ -42,6 +42,7 @@ pub struct TradeSimulator {
     base_price: f64,
     current_price: f64,
     volatility: f64,
+    #[allow(dead_code)]
     trades_per_sec: f64,
     next_emit_ns: i64,
     emit_interval_ns: i64,

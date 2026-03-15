@@ -107,7 +107,7 @@ impl LiveDataManager {
     /// Create a new LiveDataManager with a custom data source.
     pub fn with_data_source(
         level_store: Arc<Mutex<LevelStore>>,
-        mut data_source: Box<dyn LiveDataSource>,
+        data_source: Box<dyn LiveDataSource>,
         ticker: &str,
     ) -> Self {
         Self::with_data_source_and_options(level_store, data_source, ticker, false)

@@ -10,6 +10,7 @@ const KERNEL_SRC: &str = include_str!("../../kernels/decide.cu");
 const TEMPLATE_SRC: &str = include_str!("../../kernels/decide_template.cu");
 
 /// Default signal expression matching the hardcoded logic in decide.cu.
+#[allow(dead_code)]
 const DEFAULT_SIGNAL_EXPR: &str =
     "(fair_value_estimate - mid) * mean_reversion + (mid - ema) * trend_follow + noise + (-risk_aversion * pos)";
 

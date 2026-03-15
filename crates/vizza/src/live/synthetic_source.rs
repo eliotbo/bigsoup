@@ -1,7 +1,7 @@
 //! Synthetic data source using historical patterns.
 
 use super::{LiveDataError, LiveDataSource, MarketCalendar, Result};
-use chrono::{DateTime, Datelike, Weekday};
+use chrono::{DateTime, Datelike};
 use lod::{LevelStore, PlotCandle, PlotTrade, TradeSimulator};
 
 /// Smart synthetic data source that uses historical patterns.

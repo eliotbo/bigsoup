@@ -7,8 +7,6 @@ pub mod sim;
 use pyo3::prelude::*;
 use numpy::IntoPyArray;
 
-use crate::agent::state::AgentState;
-use crate::engine::cpu_engine::CpuEngine;
 use crate::sim::{SimConfig, Simulation};
 
 #[pyclass]
@@ -22,71 +20,8 @@ impl PySimulation {
     fn new(config_json: &str) -> PyResult<Self> {
         let config: SimConfig = serde_json::from_str(config_json)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-
-        let n = config.n_agents;
-        let k = config.k;
-        let m = config.m;
-        let initial_price = config.initial_price;
-        let seed = config.seed.unwrap_or(42);
-
-        let mut agents = AgentState::new(n, k, m);
-        for c in agents.cash.iter_mut() {
-            *c = config.initial_cash as f64;
-        }
-        let bias = config.init_bias;
-        for i in 0..n {
-            let sign = if i % 2 == 0 { 1.0_f32 } else { -1.0_f32 };
-            agents.internal_state[i * m + 0] = initial_price * (1.0 + sign * bias);
-            agents.internal_state[i * m + 1] = initial_price;
-            agents.internal_state[i * m + 2] = initial_price;
-            agents.internal_state[i * m + 3] = f32::from_bits((i as u32).wrapping_mul(2654435761));
-        }
-
-        use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-
-        if let Some(archetypes) = &config.archetypes {
-            // Partition agents by archetype weight and draw params from each archetype's ranges.
-            let mut offset = 0;
-            for archetype in archetypes {
-                let count = (archetype.weight * n as f32) as usize;
-                let end = (offset + count).min(n);
-                let dists = archetype.dists();
-                for i in offset..end {
-                    for p in 0..k {
-                        let (lo, hi) = dists[p];
-                        agents.strategy_params[i * k + p] = rand::Rng::random_range(&mut rng, lo..=hi);
-                    }
-                }
-                offset = end;
-            }
-            // Fill any remaining agents with the last archetype's ranges.
-            if offset < n {
-                if let Some(last) = archetypes.last() {
-                    let dists = last.dists();
-                    for i in offset..n {
-                        for p in 0..k {
-                            let (lo, hi) = dists[p];
-                            agents.strategy_params[i * k + p] = rand::Rng::random_range(&mut rng, lo..=hi);
-                        }
-                    }
-                }
-            }
-        } else {
-            let dists = default_param_distributions();
-            agents.randomize_params(&mut rng, &dists);
-        }
-
-        let use_gpu = config.use_gpu.unwrap_or(true);
-        let engine: Box<dyn crate::engine::SimEngine> = if use_gpu {
-            let cuda_engine = crate::engine::cuda_engine::CudaEngine::new(0, &agents, None)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Box::new(cuda_engine)
-        } else {
-            Box::new(CpuEngine)
-        };
-
-        let sim = Simulation::new(config, engine, agents);
+        let sim = crate::sim::build_simulation(config)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner: sim })
     }
 

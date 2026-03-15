@@ -11,6 +11,28 @@ class ArchetypeConfig:
     from a uniform distribution.  Param order matches K=10 layout:
       aggression, mean_reversion, trend_follow, noise_scale,
       ema_alpha, fair_value_lr, position_limit, risk_aversion, curvature, midpoint
+
+
+    The desirability curve is defined as:
+        raw_signal * (1.0f / (1.0f + expf((curvature * (fabsf(pos) - midpoint)))))
+
+        When |pos| < midpoint, the exponent is negative, sigmoid is near 1 — full signal. When |pos| >
+        midpoint, sigmoid drops toward 0 — agent loses interest. curvature controls sharpness of the
+        transition. Each archetype has its own ranges:
+
+        
+        ┌────────────────┬──────────┬───────────┬───────────────────────────────┐
+        │   Archetype    │ midpoint │ curvature │           Behavior            │
+        ├────────────────┼──────────┼───────────┼───────────────────────────────┤
+        │ market_maker   │ 3-10     │ 0.8-1.2   │ Sharp cutoff at low inventory │
+        ├────────────────┼──────────┼───────────┼───────────────────────────────┤
+        │ mean_reverter  │ 5-20     │ 0.5-1.5   │ Moderate pullback             │
+        ├────────────────┼──────────┼───────────┼───────────────────────────────┤
+        │ trend_follower │ 15-50    │ 0.5-1.5   │ Willing to ride positions     │
+        ├────────────────┼──────────┼───────────┼───────────────────────────────┤
+        │ noise_trader   │ 10-50    │ 0.5-2.0   │ Variable                      │
+        └────────────────┴──────────┴───────────┴───────────────────────────────┘
+
     """
     name: str
     weight: float  # fraction of total agents (all weights should sum to ~1.0)
@@ -44,7 +66,7 @@ class ArchetypeConfig:
 
 # Canonical archetypes matching main.rs defaults.
 MEAN_REVERTER = ArchetypeConfig(
-    name="mean_reverter", weight=0.3,
+    name="mean_reverter", weight=0.50,
     aggression_range=(0.1, 0.5),
     mean_reversion_range=(0.3, 0.8),
     trend_follow_range=(0.0, 0.0),
@@ -58,7 +80,7 @@ MEAN_REVERTER = ArchetypeConfig(
 )
 
 TREND_FOLLOWER = ArchetypeConfig(
-    name="trend_follower", weight=0.3,
+    name="trend_follower", weight=0.0,
     aggression_range=(0.1, 0.5),
     mean_reversion_range=(0.0, 0.0),
     trend_follow_range=(0.2, 0.7),
@@ -72,7 +94,7 @@ TREND_FOLLOWER = ArchetypeConfig(
 )
 
 MARKET_MAKER = ArchetypeConfig(
-    name="market_maker", weight=0.2,
+    name="market_maker", weight=0.1,
     aggression_range=(0.02, 0.1),
     mean_reversion_range=(0.1, 0.3),
     trend_follow_range=(0.0, 0.0),
@@ -86,11 +108,11 @@ MARKET_MAKER = ArchetypeConfig(
 )
 
 NOISE_TRADER = ArchetypeConfig(
-    name="noise_trader", weight=0.2,
+    name="noise_trader", weight=0.4,
     aggression_range=(0.1, 0.5),
     mean_reversion_range=(0.0, 0.0),
     trend_follow_range=(0.0, 0.0),
-    noise_scale_range=(0.5, 2.0),
+    noise_scale_range=(15.0, 30.0),
     ema_alpha_range=(0.01, 0.1),
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(10.0, 100.0),
@@ -104,13 +126,13 @@ DEFAULT_ARCHETYPES = [MEAN_REVERTER, TREND_FOLLOWER, MARKET_MAKER, NOISE_TRADER]
 
 @dataclass
 class SimConfig:
-    n_agents: int = 10_000
+    n_agents: int = 100
     initial_price: float = 100.0
     initial_cash: float = 10_000.0
     k: int = 10
     m: int = 4
     use_gpu: bool = True
-    seed: Optional[int] = 42
+    seed: Optional[int] = 52
     fair_value_vol: float = 0.002
     init_bias: float = 0.02
     archetypes: Optional[list] = field(default_factory=lambda: list(DEFAULT_ARCHETYPES))

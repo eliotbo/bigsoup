@@ -118,6 +118,7 @@ impl MockBackfillSource {
     }
 
     /// Calculate today's market open in nanoseconds.
+    #[allow(dead_code)]
     fn get_market_open_ns(&self, reference_ns: i64) -> i64 {
         let dt =
             DateTime::from_timestamp(reference_ns / 1_000_000_000, 0).unwrap_or_else(|| Utc::now());
@@ -146,7 +147,7 @@ impl Default for MockBackfillSource {
 }
 
 impl LiveDataSource for MockBackfillSource {
-    fn initialize(&mut self, historical_data: &LevelStore, ticker: &str) -> Result<()> {
+    fn initialize(&mut self, _historical_data: &LevelStore, ticker: &str) -> Result<()> {
         self.ticker = ticker.to_string();
 
         // // Try to get last bar from historical data, but allow initialization without it

@@ -339,7 +339,9 @@ pub struct LiveEngine {
     trades: HotTradesRing,
     lods: Vec<LodLane>,
     intervals_secs: Vec<u64>,
+    #[allow(dead_code)]
     base_epoch_ns: i64,
+    #[allow(dead_code)]
     reorder_ns: i64,
     last_update_ns: AtomicI64,
     trades_dropped: AtomicU64,
