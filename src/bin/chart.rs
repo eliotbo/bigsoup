@@ -1,7 +1,7 @@
 use clap::Parser;
 use econsim::sim::{SimConfig, build_simulation};
 use lod::{LevelStore, PlotCandle};
-use vizza::{LodLevel, MarketData, PlotBuilder};
+use vizza::{LineOverlay, LodLevel, MarketData, PlotBuilder};
 
 /*
 cargo install --path . --bin chart
@@ -57,6 +57,22 @@ fn aggregate_candles(
             let volume: f32 = vols.iter().sum();
             let ts = base_ts_ns + i as i64 * ticks_per_candle as i64 * tick_duration_ns;
             Some(PlotCandle::new(ts, open, high, low, close, volume))
+        })
+        .collect()
+}
+
+fn downsample_line(
+    values: &[f32],
+    ticks_per_point: usize,
+    base_ts_ns: i64,
+    tick_ns: i64,
+) -> Vec<(i64, f32)> {
+    values
+        .chunks(ticks_per_point)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let ts = base_ts_ns + i as i64 * ticks_per_point as i64 * tick_ns;
+            (ts, *chunk.last().unwrap())
         })
         .collect()
 }
@@ -138,10 +154,17 @@ fn main() -> anyhow::Result<()> {
 
     let market_data = MarketData::from_level_store(level_store);
 
+    let ticks_per_second = (1_000_000_000 / tick_ns).max(1) as usize;
+    let exo_overlay = LineOverlay::new(
+        downsample_line(&sim.exo_price_history, ticks_per_second, base_ts_ns, tick_ns),
+        [0.4, 0.7, 1.0, 0.5], // light blue, semi-transparent
+    );
+
     PlotBuilder::new()
         .with_window_size(1400, 700)
         .with_market_data(market_data)
         .with_lod_level(LodLevel::S1)
+        .with_line_overlays(vec![vec![exo_overlay]])
         .with_title("econsim")
         .run()?;
 

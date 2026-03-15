@@ -33,6 +33,10 @@ class ArchetypeConfig:
         │ noise_trader   │ 10-50    │ 0.5-2.0   │ Variable                      │
         └────────────────┴──────────┴───────────┴───────────────────────────────┘
 
+        The desirability sigmoid is:
+        1 / (1 + e^(curvature * (|x| - midpoint)))
+
+
     """
     name: str
     weight: float  # fraction of total agents (all weights should sum to ~1.0)
@@ -75,7 +79,7 @@ MEAN_REVERTER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(10.0, 100.0),
     risk_aversion_range=(0.01, 0.1),
-    curvature_range=(0.5, 1.5),
+    curvature_range=(0.0, 0.0), # (0.5, 1.5),
     midpoint_range=(5.0, 20.0),
 )
 
@@ -89,7 +93,7 @@ TREND_FOLLOWER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(10.0, 100.0),
     risk_aversion_range=(0.01, 0.1),
-    curvature_range=(0.5, 1.5),
+    curvature_range=(0.0, 0.0),
     midpoint_range=(15.0, 50.0),
 )
 
@@ -103,7 +107,7 @@ MARKET_MAKER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(5.0, 20.0),
     risk_aversion_range=(0.05, 0.2),
-    curvature_range=(0.8, 1.2),
+    curvature_range=(0.0, 0.0),
     midpoint_range=(3.0, 10.0),
 )
 
@@ -117,7 +121,7 @@ NOISE_TRADER = ArchetypeConfig(
     fair_value_lr_range=(0.001, 0.01),
     position_limit_range=(10.0, 100.0),
     risk_aversion_range=(0.01, 0.1),
-    curvature_range=(0.5, 2.0),
+    curvature_range=(0.0, 0.0),
     midpoint_range=(10.0, 50.0),
 )
 
@@ -132,7 +136,7 @@ class SimConfig:
     k: int = 10
     m: int = 4
     use_gpu: bool = True
-    seed: Optional[int] = 52
+    seed: Optional[int] = 53
     fair_value_vol: float = 0.002
     init_bias: float = 0.02
     archetypes: Optional[list] = field(default_factory=lambda: list(DEFAULT_ARCHETYPES))

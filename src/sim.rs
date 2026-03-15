@@ -148,6 +148,7 @@ pub struct Simulation {
     pub tick: u64,
     pub price_history: Vec<f32>,
     pub volume_history: Vec<f32>,
+    pub exo_price_history: Vec<f32>,
     /// Current exogenous fundamental value; evolves each tick when fair_value_vol > 0.
     pub exo_price: f32,
     pub timings: StepTimings,
@@ -169,6 +170,7 @@ impl Simulation {
             tick: 0,
             price_history: Vec::new(),
             volume_history: Vec::new(),
+            exo_price_history: Vec::new(),
             exo_price,
             timings: StepTimings::default(),
             fair_value_vol,
@@ -220,6 +222,7 @@ impl Simulation {
         let new_bbo = self.order_book.bbo();
         self.price_history.push(new_bbo.last_price);
         self.volume_history.push(trades.iter().map(|t| t.quantity.abs()).sum());
+        self.exo_price_history.push(self.exo_price);
 
         self.tick += 1;
     }
