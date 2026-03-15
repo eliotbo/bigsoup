@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use ordered_float::OrderedFloat;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use super::types::{BBO, LobOrder, OrderType, Side, Trade};
@@ -30,14 +31,23 @@ impl BookSide {
     }
 }
 
+/// Sentinel tick value for persistent orders (MM quotes).
+/// Orders with this tick are never expired and are tracked in agent_orders/order_index
+/// for individual cancellation.
+const PERSISTENT_TICK: u64 = u64::MAX;
+
 pub struct LimitOrderBook {
     bids: BookSide,
     asks: BookSide,
     next_order_id: u64,
     last_price: f32,
     tick: u64,
-    agent_orders: HashMap<u32, SmallVec<[u64; 4]>>,
-    order_index: HashMap<u64, (Side, OrderedFloat<f32>)>,
+    /// Only persistent (MM) orders are tracked here for cancel_agent lookups.
+    agent_orders: FxHashMap<u32, SmallVec<[u64; 4]>>,
+    order_index: FxHashMap<u64, (Side, OrderedFloat<f32>)>,
+    // Reusable buffers to avoid per-call allocations
+    empty_prices_buf: Vec<OrderedFloat<f32>>,
+    filled_resting_buf: Vec<(u32, u64)>,
 }
 
 impl LimitOrderBook {
@@ -48,12 +58,14 @@ impl LimitOrderBook {
             next_order_id: 0,
             last_price: initial_price,
             tick: 0,
-            agent_orders: HashMap::new(),
-            order_index: HashMap::new(),
+            agent_orders: FxHashMap::default(),
+            order_index: FxHashMap::default(),
+            empty_prices_buf: Vec::new(),
+            filled_resting_buf: Vec::new(),
         }
     }
 
-    /// Remove all resting orders for the given agent.
+    /// Remove all resting orders for the given agent (persistent/MM orders only).
     pub fn cancel_agent(&mut self, agent_id: u32) {
         if let Some(order_ids) = self.agent_orders.remove(&agent_id) {
             for order_id in order_ids {
@@ -80,33 +92,41 @@ impl LimitOrderBook {
     }
 
     /// Submit an order: match against the book, then rest any remainder (limit only).
-    pub fn submit_order(&mut self, mut order: LobOrder) -> Vec<Trade> {
+    /// Trades are appended to `trades_out`.
+    fn submit_order(&mut self, mut order: LobOrder, trades_out: &mut Vec<Trade>) {
         order.order_id = self.next_order_id;
         self.next_order_id += 1;
 
-        let trades = match order.side {
-            Side::Buy => self.match_buy_order(&mut order),
-            Side::Sell => self.match_sell_order(&mut order),
+        let before = trades_out.len();
+        match order.side {
+            Side::Buy => self.match_buy_order(&mut order, trades_out),
+            Side::Sell => self.match_sell_order(&mut order, trades_out),
         };
 
-        if let Some(last) = trades.last() {
-            self.last_price = last.price;
+        if let Some(last) = trades_out.get(trades_out.len().wrapping_sub(1)) {
+            if trades_out.len() > before {
+                self.last_price = last.price;
+            }
         }
 
         // Rest remaining quantity for limit orders
         if order.order_type == OrderType::Limit && order.quantity > f32::EPSILON {
             self.rest_order(order);
         }
+    }
 
+    /// Public convenience for single-order submission (used by tests).
+    pub fn submit_order_vec(&mut self, order: LobOrder) -> Vec<Trade> {
+        let mut trades = Vec::new();
+        self.submit_order(order, &mut trades);
         trades
     }
 
     /// Match an incoming buy against resting asks (ascending by price).
-    fn match_buy_order(&mut self, order: &mut LobOrder) -> Vec<Trade> {
-        let mut trades = Vec::new();
+    fn match_buy_order(&mut self, order: &mut LobOrder, trades: &mut Vec<Trade>) {
         let is_market = order.order_type == OrderType::Market;
-        let mut empty_prices = Vec::new();
-        let mut filled_resting: Vec<(u32, u64)> = Vec::new();
+        self.empty_prices_buf.clear();
+        self.filled_resting_buf.clear();
         let tick = self.tick;
 
         for (&price, level) in self.asks.levels.iter_mut() {
@@ -135,34 +155,35 @@ impl LimitOrderBook {
 
                 if resting.quantity <= f32::EPSILON {
                     let done = level.orders.pop_front().unwrap();
-                    filled_resting.push((done.agent_id, done.order_id));
+                    // Only clean up index for persistent orders
+                    if done.tick == PERSISTENT_TICK {
+                        self.filled_resting_buf.push((done.agent_id, done.order_id));
+                    }
                 }
             }
 
             if level.orders.is_empty() {
-                empty_prices.push(price);
+                self.empty_prices_buf.push(price);
             }
         }
 
-        for price in empty_prices {
-            self.asks.levels.remove(&price);
+        for i in 0..self.empty_prices_buf.len() {
+            self.asks.levels.remove(&self.empty_prices_buf[i]);
         }
-        for (agent_id, order_id) in filled_resting {
+        for i in 0..self.filled_resting_buf.len() {
+            let (agent_id, order_id) = self.filled_resting_buf[i];
             self.order_index.remove(&order_id);
             if let Some(orders) = self.agent_orders.get_mut(&agent_id) {
                 orders.retain(|id| *id != order_id);
             }
         }
-
-        trades
     }
 
     /// Match an incoming sell against resting bids (descending by price).
-    fn match_sell_order(&mut self, order: &mut LobOrder) -> Vec<Trade> {
-        let mut trades = Vec::new();
+    fn match_sell_order(&mut self, order: &mut LobOrder, trades: &mut Vec<Trade>) {
         let is_market = order.order_type == OrderType::Market;
-        let mut empty_prices = Vec::new();
-        let mut filled_resting: Vec<(u32, u64)> = Vec::new();
+        self.empty_prices_buf.clear();
+        self.filled_resting_buf.clear();
         let tick = self.tick;
 
         for (&price, level) in self.bids.levels.iter_mut().rev() {
@@ -191,26 +212,27 @@ impl LimitOrderBook {
 
                 if resting.quantity <= f32::EPSILON {
                     let done = level.orders.pop_front().unwrap();
-                    filled_resting.push((done.agent_id, done.order_id));
+                    if done.tick == PERSISTENT_TICK {
+                        self.filled_resting_buf.push((done.agent_id, done.order_id));
+                    }
                 }
             }
 
             if level.orders.is_empty() {
-                empty_prices.push(price);
+                self.empty_prices_buf.push(price);
             }
         }
 
-        for price in empty_prices {
-            self.bids.levels.remove(&price);
+        for i in 0..self.empty_prices_buf.len() {
+            self.bids.levels.remove(&self.empty_prices_buf[i]);
         }
-        for (agent_id, order_id) in filled_resting {
+        for i in 0..self.filled_resting_buf.len() {
+            let (agent_id, order_id) = self.filled_resting_buf[i];
             self.order_index.remove(&order_id);
             if let Some(orders) = self.agent_orders.get_mut(&agent_id) {
                 orders.retain(|id| *id != order_id);
             }
         }
-
-        trades
     }
 
     /// Place a limit order on the book (no matching).
@@ -220,6 +242,7 @@ impl LimitOrderBook {
         let agent_id = order.agent_id;
         let side = order.side;
         let qty = order.quantity;
+        let is_persistent = order.tick == PERSISTENT_TICK;
 
         let book_side = match side {
             Side::Buy => &mut self.bids,
@@ -236,77 +259,58 @@ impl LimitOrderBook {
         level.total_quantity += qty;
         level.orders.push_back(order);
 
-        self.order_index.insert(order_id, (side, price));
-        self.agent_orders.entry(agent_id).or_default().push(order_id);
+        // Only track persistent (MM) orders in the index — ephemeral orders
+        // are bulk-expired and never individually cancelled.
+        if is_persistent {
+            self.order_index.insert(order_id, (side, price));
+            self.agent_orders.entry(agent_id).or_default().push(order_id);
+        }
     }
 
     /// Full tick: cancel specified agents, then process market orders, then limit orders.
+    /// Trades are appended to `trades_out` (caller should clear before calling).
     pub fn process_tick(
         &mut self,
         cancel_agents: &[u32],
         market_orders: Vec<LobOrder>,
         limit_orders: Vec<LobOrder>,
         tick: u64,
-    ) -> Vec<Trade> {
+        trades_out: &mut Vec<Trade>,
+    ) {
         self.tick = tick;
-        let mut all_trades = Vec::new();
 
         for &agent_id in cancel_agents {
             self.cancel_agent(agent_id);
         }
 
         for order in market_orders {
-            let trades = self.submit_order(order);
-            all_trades.extend(trades);
+            self.submit_order(order, trades_out);
         }
 
         for order in limit_orders {
-            let trades = self.submit_order(order);
-            all_trades.extend(trades);
+            self.submit_order(order, trades_out);
         }
 
-        if let Some(last) = all_trades.last() {
+        if let Some(last) = trades_out.last() {
             self.last_price = last.price;
         }
-
-        all_trades
     }
 
     /// Remove all orders placed before `min_tick`.
     pub fn expire_orders_before(&mut self, min_tick: u64) {
-        Self::expire_side(
-            &mut self.bids,
-            min_tick,
-            &mut self.agent_orders,
-            &mut self.order_index,
-        );
-        Self::expire_side(
-            &mut self.asks,
-            min_tick,
-            &mut self.agent_orders,
-            &mut self.order_index,
-        );
+        // Ephemeral orders have tick < PERSISTENT_TICK and are not in agent_orders/order_index,
+        // so we just drain them from the book directly — no HashMap cleanup needed.
+        Self::expire_side(&mut self.bids, min_tick);
+        Self::expire_side(&mut self.asks, min_tick);
     }
 
     fn expire_side(
         book_side: &mut BookSide,
         min_tick: u64,
-        agent_orders: &mut HashMap<u32, SmallVec<[u64; 4]>>,
-        order_index: &mut HashMap<u64, (Side, OrderedFloat<f32>)>,
     ) {
         let mut empty_prices = Vec::new();
         for (&price, level) in book_side.levels.iter_mut() {
-            level.orders.retain(|o| {
-                if o.tick < min_tick {
-                    order_index.remove(&o.order_id);
-                    if let Some(orders) = agent_orders.get_mut(&o.agent_id) {
-                        orders.retain(|id| *id != o.order_id);
-                    }
-                    false
-                } else {
-                    true
-                }
-            });
+            level.orders.retain(|o| o.tick >= min_tick);
             level.total_quantity = level.orders.iter().map(|o| o.quantity).sum();
             if level.orders.is_empty() {
                 empty_prices.push(price);
@@ -441,11 +445,11 @@ mod tests {
     fn test_basic_crossing() {
         let mut book = LimitOrderBook::new(100.0);
         // Post a sell that rests
-        let trades1 = book.submit_order(limit_sell(1, 99.0, 3.0, 0));
+        let trades1 = book.submit_order_vec(limit_sell(1, 99.0, 3.0, 0));
         assert!(trades1.is_empty());
 
         // Aggressive buy crosses the resting sell
-        let trades2 = book.submit_order(limit_buy(0, 101.0, 5.0, 0));
+        let trades2 = book.submit_order_vec(limit_buy(0, 101.0, 5.0, 0));
         assert_eq!(trades2.len(), 1);
         assert_eq!(trades2[0].buyer_id, 0);
         assert_eq!(trades2[0].seller_id, 1);
@@ -464,7 +468,8 @@ mod tests {
     #[test]
     fn test_no_crossing() {
         let mut book = LimitOrderBook::new(100.0);
-        let trades = book.process_tick(
+        let mut trades = Vec::new();
+        book.process_tick(
             &[],
             vec![],
             vec![
@@ -472,6 +477,7 @@ mod tests {
                 limit_sell(1, 101.0, 3.0, 0),
             ],
             0,
+            &mut trades,
         );
         assert!(trades.is_empty());
         assert_eq!(book.book_depth(), 2);
@@ -480,6 +486,7 @@ mod tests {
     #[test]
     fn test_bbo_updates() {
         let mut book = LimitOrderBook::new(100.0);
+        let mut trades = Vec::new();
         book.process_tick(
             &[],
             vec![],
@@ -488,6 +495,7 @@ mod tests {
                 limit_sell(1, 100.5, 5.0, 0),
             ],
             0,
+            &mut trades,
         );
         let bbo = book.bbo();
         assert!((bbo.best_bid - 99.5).abs() < 0.01);
@@ -499,11 +507,11 @@ mod tests {
     #[test]
     fn test_price_time_priority() {
         let mut book = LimitOrderBook::new(100.0);
-        book.submit_order(limit_sell(1, 100.0, 2.0, 0));
-        book.submit_order(limit_sell(2, 100.0, 3.0, 0));
+        book.submit_order_vec(limit_sell(1, 100.0, 2.0, 0));
+        book.submit_order_vec(limit_sell(2, 100.0, 3.0, 0));
 
         // Buy should match agent 1 first (earlier in queue)
-        let trades = book.submit_order(limit_buy(0, 100.0, 4.0, 0));
+        let trades = book.submit_order_vec(limit_buy(0, 100.0, 4.0, 0));
         assert_eq!(trades.len(), 2);
         assert_eq!(trades[0].seller_id, 1);
         assert_eq!(trades[0].quantity, 2.0);
@@ -514,10 +522,10 @@ mod tests {
     #[test]
     fn test_market_order_walks_book() {
         let mut book = LimitOrderBook::new(100.0);
-        book.submit_order(limit_sell(1, 99.0, 2.0, 0));
-        book.submit_order(limit_sell(2, 100.0, 3.0, 0));
+        book.submit_order_vec(limit_sell(1, 99.0, 2.0, 0));
+        book.submit_order_vec(limit_sell(2, 100.0, 3.0, 0));
 
-        let trades = book.submit_order(market_buy(0, 4.0, 0));
+        let trades = book.submit_order_vec(market_buy(0, 4.0, 0));
         assert_eq!(trades.len(), 2);
         assert!((trades[0].price - 99.0).abs() < 0.01);
         assert_eq!(trades[0].quantity, 2.0);
@@ -531,10 +539,10 @@ mod tests {
     #[test]
     fn test_market_sell() {
         let mut book = LimitOrderBook::new(100.0);
-        book.submit_order(limit_buy(1, 101.0, 2.0, 0));
-        book.submit_order(limit_buy(2, 100.0, 3.0, 0));
+        book.submit_order_vec(limit_buy(1, 101.0, 2.0, 0));
+        book.submit_order_vec(limit_buy(2, 100.0, 3.0, 0));
 
-        let trades = book.submit_order(market_sell(0, 4.0, 0));
+        let trades = book.submit_order_vec(market_sell(0, 4.0, 0));
         assert_eq!(trades.len(), 2);
         // Sells against highest bid first
         assert!((trades[0].price - 101.0).abs() < 0.01);
@@ -546,9 +554,10 @@ mod tests {
     #[test]
     fn test_cancel_agent() {
         let mut book = LimitOrderBook::new(100.0);
-        book.submit_order(limit_buy(0, 99.0, 5.0, 0));
-        book.submit_order(limit_sell(0, 101.0, 3.0, 0));
-        book.submit_order(limit_buy(1, 98.0, 2.0, 0));
+        // Use PERSISTENT_TICK so orders are tracked in agent_orders
+        book.submit_order_vec(limit_buy(0, 99.0, 5.0, PERSISTENT_TICK));
+        book.submit_order_vec(limit_sell(0, 101.0, 3.0, PERSISTENT_TICK));
+        book.submit_order_vec(limit_buy(1, 98.0, 2.0, 0));
 
         assert_eq!(book.book_depth(), 3);
         book.cancel_agent(0);
@@ -558,6 +567,7 @@ mod tests {
     #[test]
     fn test_expire_orders() {
         let mut book = LimitOrderBook::new(100.0);
+        let mut trades = Vec::new();
         book.process_tick(
             &[],
             vec![],
@@ -566,6 +576,7 @@ mod tests {
                 limit_sell(1, 101.0, 3.0, 0),
             ],
             0,
+            &mut trades,
         );
         assert_eq!(book.book_depth(), 2);
 
@@ -577,17 +588,21 @@ mod tests {
     #[test]
     fn test_expire_preserves_newer() {
         let mut book = LimitOrderBook::new(100.0);
+        let mut trades = Vec::new();
         book.process_tick(
             &[],
             vec![],
             vec![limit_buy(0, 99.0, 5.0, 0)],
             0,
+            &mut trades,
         );
+        trades.clear();
         book.process_tick(
             &[],
             vec![],
             vec![limit_sell(1, 101.0, 3.0, 1)],
             1,
+            &mut trades,
         );
         assert_eq!(book.book_depth(), 2);
 
@@ -602,10 +617,10 @@ mod tests {
     #[test]
     fn test_trade_at_resting_price() {
         let mut book = LimitOrderBook::new(100.0);
-        book.submit_order(limit_sell(1, 99.0, 5.0, 0));
+        book.submit_order_vec(limit_sell(1, 99.0, 5.0, 0));
 
         // Aggressive buy at 105 trades at resting ask (99), not midpoint
-        let trades = book.submit_order(limit_buy(0, 105.0, 3.0, 0));
+        let trades = book.submit_order_vec(limit_buy(0, 105.0, 3.0, 0));
         assert_eq!(trades.len(), 1);
         assert!((trades[0].price - 99.0).abs() < 0.01);
     }
@@ -613,12 +628,12 @@ mod tests {
     #[test]
     fn test_multi_level_matching() {
         let mut book = LimitOrderBook::new(100.0);
-        book.submit_order(limit_sell(1, 99.0, 3.0, 0));
-        book.submit_order(limit_sell(2, 100.0, 4.0, 0));
-        book.submit_order(limit_sell(3, 101.0, 5.0, 0));
+        book.submit_order_vec(limit_sell(1, 99.0, 3.0, 0));
+        book.submit_order_vec(limit_sell(2, 100.0, 4.0, 0));
+        book.submit_order_vec(limit_sell(3, 101.0, 5.0, 0));
 
         // Buy at 100 crosses 99 and 100 but not 101
-        let trades = book.submit_order(limit_buy(0, 100.0, 10.0, 0));
+        let trades = book.submit_order_vec(limit_buy(0, 100.0, 10.0, 0));
         assert_eq!(trades.len(), 2);
         assert!((trades[0].price - 99.0).abs() < 0.01);
         assert_eq!(trades[0].quantity, 3.0);
@@ -632,31 +647,60 @@ mod tests {
     #[test]
     fn test_process_tick_cancel_then_quote() {
         let mut book = LimitOrderBook::new(100.0);
-        // MM posts initial quotes
+        let mut trades = Vec::new();
+        // MM posts initial quotes (persistent)
         book.process_tick(
             &[],
             vec![],
             vec![
-                limit_buy(10, 99.0, 5.0, 0),
-                limit_sell(10, 101.0, 5.0, 0),
+                limit_buy(10, 99.0, 5.0, PERSISTENT_TICK),
+                limit_sell(10, 101.0, 5.0, PERSISTENT_TICK),
             ],
             0,
+            &mut trades,
         );
         assert_eq!(book.book_depth(), 2);
 
         // Next tick: cancel MM, post new quotes
+        trades.clear();
         book.process_tick(
             &[10],
             vec![],
             vec![
-                limit_buy(10, 99.5, 3.0, 1),
-                limit_sell(10, 100.5, 3.0, 1),
+                limit_buy(10, 99.5, 3.0, PERSISTENT_TICK),
+                limit_sell(10, 100.5, 3.0, PERSISTENT_TICK),
             ],
             1,
+            &mut trades,
         );
         assert_eq!(book.book_depth(), 2);
         let bbo = book.bbo();
         assert!((bbo.best_bid - 99.5).abs() < 0.01);
         assert!((bbo.best_ask - 100.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_persistent_orders_survive_expire() {
+        let mut book = LimitOrderBook::new(100.0);
+        let mut trades = Vec::new();
+        // Mix of ephemeral and persistent orders
+        book.process_tick(
+            &[],
+            vec![],
+            vec![
+                limit_buy(0, 99.0, 5.0, 0),                    // ephemeral
+                limit_sell(1, 101.0, 3.0, PERSISTENT_TICK),     // persistent (MM)
+            ],
+            0,
+            &mut trades,
+        );
+        assert_eq!(book.book_depth(), 2);
+
+        // Expire tick 0 — ephemeral order removed, persistent survives
+        book.expire_orders_before(1);
+        assert_eq!(book.book_depth(), 1);
+        let asks = book.book_asks(10);
+        assert_eq!(asks.len(), 1);
+        assert!((asks[0].0 - 101.0).abs() < 0.01);
     }
 }

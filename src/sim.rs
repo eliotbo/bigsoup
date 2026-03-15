@@ -197,6 +197,7 @@ pub struct Simulation {
     participation_threshold: f32,
     rng: rand::rngs::StdRng,
     order_buffer: Vec<crate::market::types::Order>,
+    trade_buffer: Vec<crate::market::types::Trade>,
 }
 
 impl Simulation {
@@ -225,6 +226,7 @@ impl Simulation {
             participation_threshold,
             rng,
             order_buffer: Vec::with_capacity(n),
+            trade_buffer: Vec::new(),
         }
     }
 
@@ -263,12 +265,13 @@ impl Simulation {
 
         // Phase 4: Process tick on LOB (cancel, match, rest)
         let t3 = Instant::now();
-        let trades = self.lob.process_tick(&cancel_agents, market_orders, limit_orders, self.tick);
+        self.trade_buffer.clear();
+        self.lob.process_tick(&cancel_agents, market_orders, limit_orders, self.tick, &mut self.trade_buffer);
         self.timings.lob_match += t3.elapsed();
 
         // Phase 5: Apply fills to agent positions/cash (f64 accumulation for precision)
         let t4 = Instant::now();
-        for trade in &trades {
+        for trade in &self.trade_buffer {
             let qty = trade.quantity as f64;
             let px = trade.price as f64;
             self.agents.position[trade.buyer_id as usize] += qty;
@@ -286,7 +289,7 @@ impl Simulation {
         // Record history
         let new_bbo = self.lob.bbo();
         self.price_history.push(new_bbo.last_price);
-        self.volume_history.push(trades.iter().map(|t| t.quantity.abs()).sum());
+        self.volume_history.push(self.trade_buffer.iter().map(|t| t.quantity.abs()).sum());
         self.exo_price_history.push(self.exo_price);
         self.spread_history.push(new_bbo.best_ask - new_bbo.best_bid);
         self.bid_depth_history.push(self.lob.bids_total_qty());

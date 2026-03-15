@@ -7,7 +7,7 @@ use rand::SeedableRng;
 
 fn main() {
     let config = SimConfig {
-        n_agents: 100_000,
+        n_agents: 1_000_000,
         initial_price: 100.0,
         initial_cash: 10_000.0,
         k: 10,
