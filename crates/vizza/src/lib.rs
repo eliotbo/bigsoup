@@ -22,7 +22,7 @@ pub use config::{ColorPalette, Config, Theme, ViewSettings};
 pub use event::MouseState;
 pub use loader::{MarketData, load_market_data};
 pub use price_spacing::{PriceTickSpacing, select_price_spacing};
-pub use state::{PositionOverlay, PriceLevelQuad, ViewportState};
+pub use state::{LineOverlay, PositionOverlay, PriceLevelQuad, ViewportState};
 pub use time_spacing::{TimeTickSpacing, TimeUnit, candidate_steps, select_time_spacing};
 
 // Re-export public API for creating plots

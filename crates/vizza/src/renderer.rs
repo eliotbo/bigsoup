@@ -238,6 +238,10 @@ impl Renderer {
                     state.set_price_level_quads(quads.clone());
                 }
 
+                if let Some(lines) = vizza_config.line_overlays.get(idx) {
+                    state.set_line_overlays(lines.clone());
+                }
+
                 if let Some(ticker) = vizza_config
                     .tickers
                     .get(idx)
@@ -554,6 +558,10 @@ impl Renderer {
 
                 if let Some(quads) = vizza_config.price_level_quads.get(idx) {
                     state.set_price_level_quads(quads.clone());
+                }
+
+                if let Some(lines) = vizza_config.line_overlays.get(idx) {
+                    state.set_line_overlays(lines.clone());
                 }
 
                 if let Some(ticker) = vizza_config

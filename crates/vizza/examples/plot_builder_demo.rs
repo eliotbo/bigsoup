@@ -8,13 +8,13 @@
 ///
 /// Run with: cargo run --example plot_builder_demo
 use anyhow::Result;
-use vizza::{Config, LodLevel, PlotBuilder, ViewSettings};
+use vizza::{Config, LodLevel, PlotBuilder, Theme, ViewSettings};
 
 fn main() -> Result<()> {
     // Choose which example to run by uncommenting one of the functions below:
 
     // Example 1: Simple plot with default settings
-    example_1_simple_default()?;
+    // example_1_simple_default()?;
 
     // Example 2: Custom grid layout (3x3)
     // example_2_custom_grid()?;
@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     // example_4_full_config()?;
 
     // Example 5: Using the simple plot() function
-    // example_5_simple_function()?;
+    example_5_simple_function()?;
 
     Ok(())
 }
@@ -57,14 +57,14 @@ fn example_2_custom_grid() -> Result<()> {
 fn example_3_custom_data_paths() -> Result<()> {
     println!("Running Example 3: Custom data paths");
 
-    let base = "../../data/consolidated/stock-split-dividend-test/";
+    let base = "../../../bb/beta_breaker/crates/bt_orb1/data/highcaptech/";
 
     PlotBuilder::new()
         .with_data_paths(vec![
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
+            format!("{}MSFT/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}META/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}AMZN/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}GOOG/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
         ])
         .with_grid(2, 2)
         .run()
@@ -76,14 +76,14 @@ fn example_3_custom_data_paths() -> Result<()> {
 fn example_4_full_config() -> Result<()> {
     println!("Running Example 4: Full configuration");
 
-    let base = "../../data/consolidated/stock-split-dividend-test/";
+    let base = "../../../bb/beta_breaker/crates/bt_orb1/data/highcaptech/";
 
     PlotBuilder::new()
         .with_data_paths(vec![
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
+            format!("{}MSFT/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}META/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}AMZN/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}GOOG/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
         ])
         .with_window_size(1400, 1400)
         .with_grid(2, 2)
@@ -99,14 +99,14 @@ fn example_4_full_config() -> Result<()> {
 fn example_5_simple_function() -> Result<()> {
     println!("Running Example 5: Simple plot() function");
 
-    let base = "../../data/consolidated/stock-split-dividend-test/";
+    let base = "../../../bb/beta_breaker/crates/bt_orb1/data/highcaptech/";
 
     vizza::plot(
         vec![
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
+            format!("{}MSFT/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}META/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}AMZN/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}GOOG/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
         ],
         2,     // rows
         2,     // cols
@@ -120,17 +120,17 @@ fn example_5_simple_function() -> Result<()> {
 fn _example_6_plot_with_config() -> Result<()> {
     println!("Running Example 6: plot_with_config()");
 
-    let base = "../../data/consolidated/stock-split-dividend-test/";
+    let base = "../../../bb/beta_breaker/crates/bt_orb1/data/highcaptech/";
 
     let config = Config {
         default_lod_level: LodLevel::D1,
         data_paths: vec![
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
-            format!("{}FAST/2025-01-15_to_2025-10-03-ohlcv-1m.nohlcv", base),
+            format!("{}MSFT/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}META/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}AMZN/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
+            format!("{}GOOG/2018-05-01_to_2025-11-04-ohlcv-1m.nohlcv", base),
         ],
-        view_settings: ViewSettings { auto_y_scale: true },
+        view_settings: ViewSettings { auto_y_scale: true, show_volume_bars: true },
         window_width: 1200,
         window_height: 1200,
         grid_rows: 2,
@@ -140,6 +140,11 @@ fn _example_6_plot_with_config() -> Result<()> {
         tickers: Vec::new(),
         titles: Vec::new(),
         bar_width_px: 3,
+        price_level_quads: Vec::new(),
+        line_overlays: Vec::new(),
+        initial_left_ts: None,
+        initial_left_times: Vec::new(),
+        theme: Theme::Light,
     };
 
     vizza::plot_with_config(

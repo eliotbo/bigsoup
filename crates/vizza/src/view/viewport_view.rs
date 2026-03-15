@@ -1,6 +1,7 @@
 use super::{
     bars::{BarRenderer, MarkerInstanceData},
     grid::GridRenderer,
+    line_overlay::{LineOverlayRenderer, LineVertex},
     position_overlay::{PositionOverlayInstanceData, PositionOverlayRenderer},
     price_level_quad::{PriceLevelQuadInstanceData, PriceLevelQuadRenderer},
 };
@@ -21,6 +22,7 @@ pub struct ViewportView {
     pub grid: GridRenderer,
     pub position_overlays: PositionOverlayRenderer,
     pub price_level_quads: PriceLevelQuadRenderer,
+    pub line_overlays: LineOverlayRenderer,
     pub live_manager: Option<LiveDataManager>,
     cached_live_data: Option<LiveRenderData>,
     live_overlay_cache: Vec<PlotCandle>,
@@ -81,6 +83,18 @@ impl ViewportView {
         );
         price_level_quads.update_view_uniform(&bars.view_uniform, queue);
 
+        let mut line_overlays = LineOverlayRenderer::new(
+            device,
+            format,
+            state.x,
+            state.y,
+            state.width,
+            state.height,
+            window_w,
+            window_h,
+        );
+        line_overlays.update_view_uniform(&bars.view_uniform, queue);
+
         let grid = GridRenderer::new(
             device,
             queue,
@@ -107,6 +121,7 @@ impl ViewportView {
             grid,
             position_overlays,
             price_level_quads,
+            line_overlays,
             live_manager,
             cached_live_data: None,
             live_overlay_cache: Vec::new(),
@@ -170,6 +185,18 @@ impl ViewportView {
         );
         price_level_quads.update_view_uniform(&bars.view_uniform, queue);
 
+        let mut line_overlays = LineOverlayRenderer::new(
+            device,
+            format,
+            state.x,
+            state.y,
+            state.width,
+            state.height,
+            window_w,
+            window_h,
+        );
+        line_overlays.update_view_uniform(&bars.view_uniform, queue);
+
         let grid = GridRenderer::new(
             device,
             queue,
@@ -210,6 +237,7 @@ impl ViewportView {
             grid,
             position_overlays,
             price_level_quads,
+            line_overlays,
             live_manager,
             cached_live_data: None,
             live_overlay_cache: Vec::new(),
@@ -230,6 +258,8 @@ impl ViewportView {
         self.position_overlays
             .update_view_uniform(&self.bars.view_uniform, queue);
         self.price_level_quads
+            .update_view_uniform(&self.bars.view_uniform, queue);
+        self.line_overlays
             .update_view_uniform(&self.bars.view_uniform, queue);
 
         let lod_level = state.zoom.current_lod_level;
@@ -480,6 +510,16 @@ impl ViewportView {
             max_price,
         );
 
+        self.refresh_line_overlays(
+            queue,
+            state,
+            lod_level,
+            num_bars_in_viewport,
+            historical_slice,
+            min_price,
+            max_price,
+        );
+
         self.bars.update_marker_instance(marker_data, queue);
 
         let elapsed = update_start.elapsed();
@@ -664,6 +704,90 @@ impl ViewportView {
         }
     }
 
+    fn refresh_line_overlays(
+        &mut self,
+        queue: &wgpu::Queue,
+        state: &ViewportState,
+        lod_level: crate::zoom::LodLevel,
+        num_bars_in_viewport: u32,
+        historical_slice: &[PlotCandle],
+        min_price: f32,
+        max_price: f32,
+    ) {
+        if state.line_overlays().is_empty() || num_bars_in_viewport == 0 {
+            self.line_overlays.clear();
+            return;
+        }
+
+        let base_ts = if let Some(candle) = historical_slice.first() {
+            candle.ts
+        } else if let Some(candle) = self.live_overlay_cache.first() {
+            candle.ts
+        } else {
+            self.line_overlays.clear();
+            return;
+        };
+
+        let interval_ns = (lod_level.seconds() as f64) * 1_000_000_000.0;
+        if interval_ns <= 0.0 {
+            self.line_overlays.clear();
+            return;
+        }
+
+        let base_ts_f = base_ts as f64;
+        let viewport_bars = num_bars_in_viewport.max(1) as f32;
+
+        let mut price_span = max_price - min_price;
+        if price_span.abs() < 1e-6 {
+            price_span = 1e-6;
+        }
+        let normalize_price = |price: f32| -> f32 {
+            ((price - min_price) / price_span) * 2.0 - 1.0
+        };
+
+        let mut vertices = Vec::new();
+
+        for overlay in state.line_overlays() {
+            if overlay.points.len() < 2 {
+                continue;
+            }
+
+            // Convert points to bar-space coordinates
+            let mut converted: Vec<[f32; 2]> = Vec::with_capacity(overlay.points.len());
+            for &(ts, price) in &overlay.points {
+                let delta = ((ts as f64) - base_ts_f) / interval_ns;
+                let x_pos = delta as f32 - LEFT_PADDING_BARS;
+                let x_norm = (x_pos / viewport_bars) * 2.0 - 1.0;
+                let y_norm = normalize_price(price);
+                converted.push([x_norm, y_norm]);
+            }
+
+            // Emit LineList pairs for adjacent points
+            for pair in converted.windows(2) {
+                // Skip segments entirely outside viewport
+                if (pair[0][0] > 1.0 && pair[1][0] > 1.0)
+                    || (pair[0][0] < -1.0 && pair[1][0] < -1.0)
+                {
+                    continue;
+                }
+                vertices.push(LineVertex {
+                    position: pair[0],
+                    color: overlay.color,
+                });
+                vertices.push(LineVertex {
+                    position: pair[1],
+                    color: overlay.color,
+                });
+            }
+        }
+
+        if vertices.is_empty() {
+            self.line_overlays.clear();
+        } else {
+            self.line_overlays.set_vertices(&vertices, queue);
+        }
+    }
+
     pub fn resize(
         &mut self,
         state: &ViewportState,
@@ -680,6 +804,8 @@ impl ViewportView {
             .update_view_uniform(&self.bars.view_uniform, queue);
         self.price_level_quads
             .update_view_uniform(&self.bars.view_uniform, queue);
+        self.line_overlays
+            .update_view_uniform(&self.bars.view_uniform, queue);
 
         self.grid.update_uniforms(
             queue,
@@ -695,6 +821,7 @@ impl ViewportView {
     pub fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
         self.position_overlays.draw(render_pass);
         self.price_level_quads.draw(render_pass);
+        self.line_overlays.draw(render_pass);
         self.grid.draw(render_pass);
         self.bars.draw(render_pass);
     }

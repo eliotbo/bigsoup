@@ -1,4 +1,4 @@
-use crate::{state::{PositionOverlay, PriceLevelQuad}, zoom::LodLevel};
+use crate::{state::{LineOverlay, PositionOverlay, PriceLevelQuad}, zoom::LodLevel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
@@ -72,6 +72,7 @@ pub struct Config {
     pub allow_missing_history: bool,
     pub position_overlays: Vec<Vec<PositionOverlay>>,
     pub price_level_quads: Vec<Vec<PriceLevelQuad>>,
+    pub line_overlays: Vec<Vec<LineOverlay>>,
     pub tickers: Vec<Option<String>>,
     pub titles: Vec<Option<String>>,
     pub bar_width_px: u16,
@@ -137,6 +138,7 @@ impl Default for Config {
             allow_missing_history: false,
             position_overlays: Vec::new(),
             price_level_quads: Vec::new(),
+            line_overlays: Vec::new(),
             tickers: Vec::new(),
             titles: Vec::new(),
             bar_width_px: 3,

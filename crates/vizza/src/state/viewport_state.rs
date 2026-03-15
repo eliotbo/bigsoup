@@ -1,4 +1,4 @@
-use super::{PositionOverlay, PriceLevelQuad};
+use super::{LineOverlay, PositionOverlay, PriceLevelQuad};
 use crate::{
     config::ViewSettings,
     loader::{DividendWithIndex, MarketData},
@@ -47,6 +47,9 @@ pub struct ViewportState {
 
     // Price level quads (horizontal price-based)
     pub price_level_quads: Vec<PriceLevelQuad>,
+
+    // Line overlays (e.g. EMA, SMA)
+    pub line_overlays: Vec<LineOverlay>,
 
     /// Accumulated fractional pan (in seconds) not yet applied to viewport_right_ts
     pan_accumulator: f64,
@@ -115,6 +118,7 @@ impl ViewportState {
             title: None,
             position_overlays: Vec::new(),
             price_level_quads: Vec::new(),
+            line_overlays: Vec::new(),
             pan_accumulator: 0.0,
         }
     }
@@ -158,6 +162,14 @@ impl ViewportState {
 
     pub fn price_level_quads(&self) -> &[PriceLevelQuad] {
         &self.price_level_quads
+    }
+
+    pub fn set_line_overlays(&mut self, overlays: Vec<LineOverlay>) {
+        self.line_overlays = overlays;
+    }
+
+    pub fn line_overlays(&self) -> &[LineOverlay] {
+        &self.line_overlays
     }
 
     pub fn with_title(mut self, title: String) -> Self {

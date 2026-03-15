@@ -1,4 +1,4 @@
-use crate::{Config, LodLevel, MarketData, PositionOverlay, PriceLevelQuad, Theme, ViewSettings};
+use crate::{Config, LodLevel, LineOverlay, MarketData, PositionOverlay, PriceLevelQuad, Theme, ViewSettings};
 use anyhow::Result;
 use lod::LevelStore;
 
@@ -21,6 +21,7 @@ pub struct PlotBuilder {
     today_so_far_enabled: bool,
     position_overlays: Option<Vec<Vec<PositionOverlay>>>,
     price_level_quads: Option<Vec<Vec<PriceLevelQuad>>>,
+    line_overlays: Option<Vec<Vec<LineOverlay>>>,
     tickers: Option<Vec<Option<String>>>,
     titles: Option<Vec<Option<String>>>,
     single_title: Option<String>,
@@ -54,6 +55,7 @@ impl PlotBuilder {
             today_so_far_enabled: false,
             position_overlays: None,
             price_level_quads: None,
+            line_overlays: None,
             tickers: None,
             titles: None,
             single_title: None,
@@ -253,6 +255,15 @@ impl PlotBuilder {
         self
     }
 
+    /// Provide per-viewport line overlays (e.g. EMA, SMA lines).
+    ///
+    /// The outer vector has one entry per viewport (row-major order). Each inner
+    /// vector holds the line overlays for that viewport.
+    pub fn with_line_overlays(mut self, overlays: Vec<Vec<LineOverlay>>) -> Self {
+        self.line_overlays = Some(overlays);
+        self
+    }
+
     /// Assign per-viewport ticker strings.
     ///
     /// Provide one entry per viewport (row-major order). Use `None` for viewports
@@ -375,6 +386,21 @@ impl PlotBuilder {
             price_level_quads.push(Vec::new());
         }
 
+        // Pad line overlays to match total viewports
+        let mut line_overlays = self.line_overlays.unwrap_or_default();
+        if !line_overlays.is_empty() && line_overlays.len() > total_viewports {
+            return Err(anyhow::anyhow!(
+                "Too many line overlay lists: expected at most {} for the {}x{} grid, received {}",
+                total_viewports,
+                self.grid_rows,
+                self.grid_cols,
+                line_overlays.len()
+            ));
+        }
+        while line_overlays.len() < total_viewports {
+            line_overlays.push(Vec::new());
+        }
+
         // Pad tickers to match total viewports
         let mut tickers = self.tickers.unwrap_or_default();
         if !tickers.is_empty() && tickers.len() > total_viewports {
@@ -438,6 +464,7 @@ impl PlotBuilder {
             allow_missing_history: self.allow_missing_history,
             position_overlays,
             price_level_quads,
+            line_overlays,
             tickers,
             titles,
             bar_width_px: self.bar_width_px,
