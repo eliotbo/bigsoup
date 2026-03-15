@@ -92,10 +92,10 @@ if __name__ == "__main__":
         + (-p.risk_aversion * pos)
     
     desirability = 1.0 / (1.0 + exp(p.curvature * (abs(pos) - p.midpoint)))
-    
+
     c_str = compile(signal(raw * desirability))
 
     print(f'DSL signal: {c_str}')
 
     config = SimConfig()
-    show_chart(config, n_ticks=100_000, strategy=c_str)
+    show_chart(config, n_ticks=1_000_000, strategy=c_str)

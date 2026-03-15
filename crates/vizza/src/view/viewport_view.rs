@@ -714,7 +714,7 @@ impl ViewportView {
         min_price: f32,
         max_price: f32,
     ) {
-        if state.line_overlays().is_empty() || num_bars_in_viewport == 0 {
+        if !state.show_line_overlays || state.line_overlays().is_empty() || num_bars_in_viewport == 0 {
             self.line_overlays.clear();
             return;
         }

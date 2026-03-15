@@ -184,8 +184,13 @@ impl Simulation {
         let t0 = Instant::now();
         if self.fair_value_vol > 0.0 {
             let u: f32 = rand::Rng::random(&mut self.rng);
-            let shock = (u * 2.0 - 1.0) * self.fair_value_vol * self.exo_price;
-            self.exo_price = (self.exo_price + shock).max(0.01);
+            // Original: additive shock with floor
+            // let shock = (u * 2.0 - 1.0) * self.fair_value_vol * self.exo_price;
+            // self.exo_price = (self.exo_price + shock).max(0.01);
+
+            // Log-space shock: applies to log(price), so price stays positive by construction
+            let log_shock = (u * 2.0 - 1.0) * self.fair_value_vol;
+            self.exo_price = (self.exo_price.ln() + log_shock).exp();
         }
         self.timings.exo_price += t0.elapsed();
 

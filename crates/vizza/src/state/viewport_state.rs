@@ -51,6 +51,9 @@ pub struct ViewportState {
     // Line overlays (e.g. EMA, SMA)
     pub line_overlays: Vec<LineOverlay>,
 
+    /// Whether line overlays are visible (toggled with S key)
+    pub show_line_overlays: bool,
+
     /// Accumulated fractional pan (in seconds) not yet applied to viewport_right_ts
     pan_accumulator: f64,
 }
@@ -119,6 +122,7 @@ impl ViewportState {
             position_overlays: Vec::new(),
             price_level_quads: Vec::new(),
             line_overlays: Vec::new(),
+            show_line_overlays: true,
             pan_accumulator: 0.0,
         }
     }

@@ -289,6 +289,16 @@ pub fn handle_keyboard_input(
                         renderer.toggle_grid_visibility(focused_idx);
                         dirty = true;
                     }
+                    KeyCode::KeyS => {
+                        viewport.show_line_overlays = !viewport.show_line_overlays;
+                        println!(
+                            "Viewport {}: Line overlays: {}",
+                            focused_idx,
+                            if viewport.show_line_overlays { "ON" } else { "OFF" }
+                        );
+                        renderer.update_viewport_instances(focused_idx);
+                        dirty = true;
+                    }
                     KeyCode::Comma => {
                         if viewport.zoom.decrease_bar_width() {
                             println!(
