@@ -7,7 +7,7 @@ use rand::SeedableRng;
 
 fn main() {
     let config = SimConfig {
-        n_agents: 1_000_000,
+        n_agents: 100_000,
         initial_price: 100.0,
         initial_cash: 10_000.0,
         k: 10,
@@ -18,6 +18,7 @@ fn main() {
         init_bias: 0.02,       // ±2% initial fair-value disagreement between agents
         archetypes: None,      // main.rs manages archetypes directly below
         market_order_threshold: 0.0,
+        participation_threshold: 0.5,
     };
 
     let n_agents = config.n_agents;
@@ -202,9 +203,8 @@ fn print_timing_table(t: &econsim::sim::StepTimings, total: std::time::Duration)
         ("  gpu kernel launch",  t.gpu_kernel),
         ("  gpu download",       t.gpu_download),
         ("order convert",       t.order_convert),
-        ("lob match",           t.lob_match),
+        ("order book match",    t.lob_match),
         ("fill application",    t.fill_apply),
-        ("lob expire",          t.lob_expire),
     ];
 
     for (name, dur) in phases {

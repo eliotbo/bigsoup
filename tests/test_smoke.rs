@@ -47,6 +47,7 @@ fn make_simulation(n_agents: usize, seed: u64) -> Simulation {
         init_bias: 0.0,
         archetypes: None,
         market_order_threshold: 0.0,
+        participation_threshold: 0.0,
     };
 
     Simulation::new(config, Box::new(CpuEngine), agents)

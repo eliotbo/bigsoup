@@ -150,6 +150,7 @@ class SimConfig:
     init_bias: float = 0.02
     archetypes: Optional[list] = field(default_factory=lambda: list(DEFAULT_ARCHETYPES))
     market_order_threshold: float = 0.0
+    participation_threshold: float = 0.5
 
     def to_json(self) -> str:
         d = {
@@ -163,6 +164,7 @@ class SimConfig:
             "fair_value_vol": self.fair_value_vol,
             "init_bias": self.init_bias,
             "market_order_threshold": self.market_order_threshold,
+            "participation_threshold": self.participation_threshold,
         }
         if self.archetypes is not None:
             d["archetypes"] = [a.to_dict() for a in self.archetypes]

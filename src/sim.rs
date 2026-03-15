@@ -137,6 +137,10 @@ pub struct SimConfig {
     /// 0.0 = disabled (all orders are limit orders).
     #[serde(default)]
     pub market_order_threshold: f32,
+    /// Minimum |quantity| * aggression for a non-MM agent to participate at all.
+    /// 0.0 = everyone participates every tick (default, backward compatible).
+    #[serde(default)]
+    pub participation_threshold: f32,
 }
 
 impl Default for SimConfig {
@@ -153,6 +157,7 @@ impl Default for SimConfig {
             init_bias: 0.0,
             archetypes: None,
             market_order_threshold: 0.0,
+            participation_threshold: 0.0,
         }
     }
 }
@@ -173,6 +178,7 @@ pub struct Simulation {
     pub timings: StepTimings,
     fair_value_vol: f32,
     market_order_threshold: f32,
+    participation_threshold: f32,
     rng: rand::rngs::StdRng,
     order_buffer: Vec<crate::market::types::Order>,
 }
@@ -183,6 +189,7 @@ impl Simulation {
         let exo_price = config.initial_price;
         let fair_value_vol = config.fair_value_vol;
         let market_order_threshold = config.market_order_threshold;
+        let participation_threshold = config.participation_threshold;
         let rng = rand::rngs::StdRng::seed_from_u64(config.seed.unwrap_or(42));
         Self {
             agents,
@@ -199,6 +206,7 @@ impl Simulation {
             timings: StepTimings::default(),
             fair_value_vol,
             market_order_threshold,
+            participation_threshold,
             rng,
             order_buffer: Vec::with_capacity(n),
         }
@@ -233,6 +241,7 @@ impl Simulation {
             &self.agents,
             self.tick,
             self.market_order_threshold,
+            self.participation_threshold,
         );
         self.timings.order_convert += t2.elapsed();
 
@@ -290,6 +299,7 @@ fn convert_orders(
     agents: &AgentState,
     tick: u64,
     market_order_threshold: f32,
+    participation_threshold: f32,
 ) -> (Vec<u32>, Vec<LobOrder>, Vec<LobOrder>) {
     let mut cancel_agents = Vec::new();
     let mut market_orders = Vec::new();
@@ -302,6 +312,14 @@ fn convert_orders(
 
         let i = order.agent_id as usize;
         let is_mm = agents.agent_type[i] == 1;
+
+        // Non-MM agents with weak signals sit out entirely
+        if !is_mm
+            && participation_threshold > 0.0
+            && order.quantity.abs() * agents.get_param(i, 0) < participation_threshold
+        {
+            continue;
+        }
 
         if is_mm {
             // Market maker: cancel old quotes, post two-sided
