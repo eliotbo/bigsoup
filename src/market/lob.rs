@@ -48,6 +48,9 @@ pub struct LimitOrderBook {
     // Reusable buffers to avoid per-call allocations
     empty_prices_buf: Vec<OrderedFloat<f32>>,
     filled_resting_buf: Vec<(u32, u64)>,
+    /// Count of ephemeral (non-persistent) orders resting on the book.
+    /// When zero, expire_orders_before is a no-op.
+    ephemeral_count: usize,
 }
 
 impl LimitOrderBook {
@@ -62,6 +65,7 @@ impl LimitOrderBook {
             order_index: FxHashMap::default(),
             empty_prices_buf: Vec::new(),
             filled_resting_buf: Vec::new(),
+            ephemeral_count: 0,
         }
     }
 
@@ -155,9 +159,10 @@ impl LimitOrderBook {
 
                 if resting.quantity <= f32::EPSILON {
                     let done = level.orders.pop_front().unwrap();
-                    // Only clean up index for persistent orders
                     if done.tick == PERSISTENT_TICK {
                         self.filled_resting_buf.push((done.agent_id, done.order_id));
+                    } else {
+                        self.ephemeral_count -= 1;
                     }
                 }
             }
@@ -259,11 +264,13 @@ impl LimitOrderBook {
         level.total_quantity += qty;
         level.orders.push_back(order);
 
-        // Only track persistent (MM) orders in the index — ephemeral orders
-        // are bulk-expired and never individually cancelled.
         if is_persistent {
+            // Only track persistent (MM) orders in the index — ephemeral orders
+            // are bulk-expired and never individually cancelled.
             self.order_index.insert(order_id, (side, price));
             self.agent_orders.entry(agent_id).or_default().push(order_id);
+        } else {
+            self.ephemeral_count += 1;
         }
     }
 
@@ -298,27 +305,31 @@ impl LimitOrderBook {
 
     /// Remove all orders placed before `min_tick`.
     pub fn expire_orders_before(&mut self, min_tick: u64) {
-        // Ephemeral orders have tick < PERSISTENT_TICK and are not in agent_orders/order_index,
-        // so we just drain them from the book directly — no HashMap cleanup needed.
-        Self::expire_side(&mut self.bids, min_tick);
-        Self::expire_side(&mut self.asks, min_tick);
+        if self.ephemeral_count == 0 {
+            return;
+        }
+        self.ephemeral_count -= Self::expire_side(&mut self.bids, min_tick);
+        self.ephemeral_count -= Self::expire_side(&mut self.asks, min_tick);
     }
 
-    fn expire_side(
-        book_side: &mut BookSide,
-        min_tick: u64,
-    ) {
+    /// Expire orders with tick < min_tick. Returns number of orders removed.
+    fn expire_side(book_side: &mut BookSide, min_tick: u64) -> usize {
+        let mut removed = 0;
         let mut empty_prices = Vec::new();
         for (&price, level) in book_side.levels.iter_mut() {
+            let before = level.orders.len();
             level.orders.retain(|o| o.tick >= min_tick);
-            level.total_quantity = level.orders.iter().map(|o| o.quantity).sum();
+            removed += before - level.orders.len();
             if level.orders.is_empty() {
                 empty_prices.push(price);
+            } else if removed > 0 {
+                level.total_quantity = level.orders.iter().map(|o| o.quantity).sum();
             }
         }
         for price in empty_prices {
             book_side.levels.remove(&price);
         }
+        removed
     }
 
     /// Best bid/offer snapshot. Falls back to synthetic spread around last_price
