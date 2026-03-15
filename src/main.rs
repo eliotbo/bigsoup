@@ -7,7 +7,7 @@ use rand::SeedableRng;
 
 fn main() {
     let config = SimConfig {
-        n_agents: 100_000,
+        n_agents: 1_000_000,
         initial_price: 100.0,
         initial_cash: 10_000.0,
         k: 10,
@@ -17,6 +17,7 @@ fn main() {
         fair_value_vol: 0.002, // 0.2% per-tick random walk on fundamental
         init_bias: 0.02,       // ±2% initial fair-value disagreement between agents
         archetypes: None,      // main.rs manages archetypes directly below
+        market_order_threshold: 0.0,
     };
 
     let n_agents = config.n_agents;
@@ -57,6 +58,8 @@ fn main() {
             risk_aversion:  (0.01, 0.1),
             curvature:      (0.5, 1.5),
             midpoint:       (5.0, 20.0),
+            mm_half_spread: None,
+            mm_quote_size:  None,
         },
         Archetype {
             name: "trend_follower".to_string(), weight: 0.3,
@@ -70,6 +73,8 @@ fn main() {
             risk_aversion:  (0.01, 0.1),
             curvature:      (0.5, 1.5),
             midpoint:       (15.0, 50.0),
+            mm_half_spread: None,
+            mm_quote_size:  None,
         },
         Archetype {
             name: "market_maker".to_string(), weight: 0.2,
@@ -83,6 +88,8 @@ fn main() {
             risk_aversion:  (0.05, 0.2),
             curvature:      (0.8, 1.2),
             midpoint:       (3.0, 10.0),
+            mm_half_spread: Some((0.05, 0.2)),
+            mm_quote_size:  Some((1.0, 5.0)),
         },
         Archetype {
             name: "noise_trader".to_string(), weight: 0.2,
@@ -96,6 +103,8 @@ fn main() {
             risk_aversion:  (0.01, 0.1),
             curvature:      (0.5, 2.0),
             midpoint:       (10.0, 50.0),
+            mm_half_spread: None,
+            mm_quote_size:  None,
         },
     ];
 
@@ -109,6 +118,15 @@ fn main() {
             for p in 0..k {
                 let (lo, hi) = dists[p];
                 agents.strategy_params[i * k + p] = lo + (hi - lo) * rand::Rng::random::<f32>(&mut rng);
+            }
+        }
+        // Set up market maker fields
+        if let Some((lo, hi)) = archetype.mm_half_spread {
+            let qs = archetype.mm_quote_size.unwrap_or((1.0, 5.0));
+            for i in offset..end {
+                agents.agent_type[i] = 1;
+                agents.mm_half_spread[i] = lo + (hi - lo) * rand::Rng::random::<f32>(&mut rng);
+                agents.mm_quote_size[i] = qs.0 + (qs.1 - qs.0) * rand::Rng::random::<f32>(&mut rng);
             }
         }
         println!("  {} agents [{}-{}): {}", archetype.name, offset, end, end - offset);
@@ -183,8 +201,10 @@ fn print_timing_table(t: &econsim::sim::StepTimings, total: std::time::Duration)
         ("  gpu upload",         t.gpu_upload),
         ("  gpu kernel launch",  t.gpu_kernel),
         ("  gpu download",       t.gpu_download),
-        ("order book match",    t.order_match),
+        ("order convert",       t.order_convert),
+        ("lob match",           t.lob_match),
         ("fill application",    t.fill_apply),
+        ("lob expire",          t.lob_expire),
     ];
 
     for (name, dur) in phases {

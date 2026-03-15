@@ -9,6 +9,12 @@ pub struct AgentState {
     pub cash: Vec<f64>,              // [N] current cash
     pub strategy_params: Vec<f32>,   // [N * K] flattened, row-major per agent
     pub internal_state: Vec<f32>,    // [N * M] flattened, row-major per agent
+    /// Agent type: 0 = normal directional, 1 = market maker (two-sided quoting)
+    pub agent_type: Vec<u8>,
+    /// Market maker half-spread (CPU-only, not in strategy_params)
+    pub mm_half_spread: Vec<f32>,
+    /// Market maker quote size per side (CPU-only)
+    pub mm_quote_size: Vec<f32>,
 }
 
 impl AgentState {
@@ -21,6 +27,9 @@ impl AgentState {
             cash: vec![0.0_f64; n],
             strategy_params: vec![0.0; n * k],
             internal_state: vec![0.0; n * m],
+            agent_type: vec![0; n],
+            mm_half_spread: vec![0.0; n],
+            mm_quote_size: vec![0.0; n],
         }
     }
 

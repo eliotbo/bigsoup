@@ -5,8 +5,8 @@ use rand::SeedableRng;
 use crate::agent::state::AgentState;
 use crate::archetypes::Archetype;
 use crate::engine::SimEngine;
-use crate::market::order_book::OrderBook;
-use crate::market::types::BBO;
+use crate::market::lob::LimitOrderBook;
+use crate::market::types::{BBO, LobOrder, OrderType, Side};
 
 /// Build a `Simulation` from a `SimConfig`, initialising agents and selecting
 /// the GPU or CPU engine automatically.
@@ -42,6 +42,15 @@ pub fn build_simulation(config: SimConfig) -> anyhow::Result<Simulation> {
                 for p in 0..k {
                     let (lo, hi) = dists[p];
                     agents.strategy_params[i * k + p] = rand::Rng::random_range(&mut rng, lo..=hi);
+                }
+            }
+            // Set up market maker fields if this archetype has them
+            if let Some((lo, hi)) = archetype.mm_half_spread {
+                let qs = archetype.mm_quote_size.unwrap_or((1.0, 5.0));
+                for i in offset..end {
+                    agents.agent_type[i] = 1;
+                    agents.mm_half_spread[i] = rand::Rng::random_range(&mut rng, lo..=hi);
+                    agents.mm_quote_size[i] = rand::Rng::random_range(&mut rng, qs.0..=qs.1);
                 }
             }
             offset = end;
@@ -86,14 +95,16 @@ pub fn build_simulation(config: SimConfig) -> anyhow::Result<Simulation> {
 /// Accumulated wall-clock time for each major phase across all ticks.
 #[derive(Default, Clone)]
 pub struct StepTimings {
-    pub exo_price:    Duration,
-    pub agent_decide: Duration,
-    pub order_match:  Duration,
-    pub fill_apply:   Duration,
+    pub exo_price:      Duration,
+    pub agent_decide:   Duration,
+    pub order_convert:  Duration,
+    pub lob_match:      Duration,
+    pub fill_apply:     Duration,
+    pub lob_expire:     Duration,
     // GPU sub-phases (zero when using CPU engine)
-    pub gpu_upload:   Duration,
-    pub gpu_kernel:   Duration,
-    pub gpu_download: Duration,
+    pub gpu_upload:     Duration,
+    pub gpu_kernel:     Duration,
+    pub gpu_download:   Duration,
 }
 
 #[derive(serde::Deserialize)]
@@ -122,6 +133,10 @@ pub struct SimConfig {
     /// When absent, a single uniform distribution over all agents is used.
     #[serde(default)]
     pub archetypes: Option<Vec<Archetype>>,
+    /// Minimum |signal| * aggression to submit a market order instead of limit.
+    /// 0.0 = disabled (all orders are limit orders).
+    #[serde(default)]
+    pub market_order_threshold: f32,
 }
 
 impl Default for SimConfig {
@@ -137,22 +152,27 @@ impl Default for SimConfig {
             fair_value_vol: 0.0,
             init_bias: 0.0,
             archetypes: None,
+            market_order_threshold: 0.0,
         }
     }
 }
 
 pub struct Simulation {
     pub agents: AgentState,
-    pub order_book: OrderBook,
+    pub lob: LimitOrderBook,
     pub engine: Box<dyn SimEngine>,
     pub tick: u64,
     pub price_history: Vec<f32>,
     pub volume_history: Vec<f32>,
     pub exo_price_history: Vec<f32>,
+    pub spread_history: Vec<f32>,
+    pub bid_depth_history: Vec<f32>,
+    pub ask_depth_history: Vec<f32>,
     /// Current exogenous fundamental value; evolves each tick when fair_value_vol > 0.
     pub exo_price: f32,
     pub timings: StepTimings,
     fair_value_vol: f32,
+    market_order_threshold: f32,
     rng: rand::rngs::StdRng,
     order_buffer: Vec<crate::market::types::Order>,
 }
@@ -162,18 +182,23 @@ impl Simulation {
         let n = agents.n;
         let exo_price = config.initial_price;
         let fair_value_vol = config.fair_value_vol;
+        let market_order_threshold = config.market_order_threshold;
         let rng = rand::rngs::StdRng::seed_from_u64(config.seed.unwrap_or(42));
         Self {
             agents,
-            order_book: OrderBook::new(config.initial_price),
+            lob: LimitOrderBook::new(config.initial_price),
             engine,
             tick: 0,
             price_history: Vec::new(),
             volume_history: Vec::new(),
             exo_price_history: Vec::new(),
+            spread_history: Vec::new(),
+            bid_depth_history: Vec::new(),
+            ask_depth_history: Vec::new(),
             exo_price,
             timings: StepTimings::default(),
             fair_value_vol,
+            market_order_threshold,
             rng,
             order_buffer: Vec::with_capacity(n),
         }
@@ -184,18 +209,13 @@ impl Simulation {
         let t0 = Instant::now();
         if self.fair_value_vol > 0.0 {
             let u: f32 = rand::Rng::random(&mut self.rng);
-            // Original: additive shock with floor
-            // let shock = (u * 2.0 - 1.0) * self.fair_value_vol * self.exo_price;
-            // self.exo_price = (self.exo_price + shock).max(0.01);
-
-            // Log-space shock: applies to log(price), so price stays positive by construction
             let log_shock = (u * 2.0 - 1.0) * self.fair_value_vol;
             self.exo_price = (self.exo_price.ln() + log_shock).exp();
         }
         self.timings.exo_price += t0.elapsed();
 
-        // Get BBO, injecting the current fundamental value
-        let mut bbo = self.order_book.bbo();
+        // BBO from LOB (reflects standing resting orders)
+        let mut bbo = self.lob.bbo();
         bbo.fair_value = self.exo_price;
 
         // Phase 2: Engine step (agents observe + decide + emit)
@@ -206,13 +226,23 @@ impl Simulation {
         self.timings.gpu_kernel   += gpu.kernel;
         self.timings.gpu_download += gpu.download;
 
-        // Phase 3: Match orders
+        // Phase 3: Convert kernel orders to LOB orders
         let t2 = Instant::now();
-        let trades = self.order_book.process_orders(&self.order_buffer, self.tick);
-        self.timings.order_match += t2.elapsed();
+        let (cancel_agents, market_orders, limit_orders) = convert_orders(
+            &self.order_buffer,
+            &self.agents,
+            self.tick,
+            self.market_order_threshold,
+        );
+        self.timings.order_convert += t2.elapsed();
 
-        // Phase 4: Apply fills to agent positions/cash (f64 accumulation for precision)
+        // Phase 4: Process tick on LOB (cancel, match, rest)
         let t3 = Instant::now();
+        let trades = self.lob.process_tick(&cancel_agents, market_orders, limit_orders, self.tick);
+        self.timings.lob_match += t3.elapsed();
+
+        // Phase 5: Apply fills to agent positions/cash (f64 accumulation for precision)
+        let t4 = Instant::now();
         for trade in &trades {
             let qty = trade.quantity as f64;
             let px = trade.price as f64;
@@ -221,13 +251,21 @@ impl Simulation {
             self.agents.position[trade.seller_id as usize] -= qty;
             self.agents.cash[trade.seller_id as usize] += px * qty;
         }
-        self.timings.fill_apply += t3.elapsed();
+        self.timings.fill_apply += t4.elapsed();
+
+        // Phase 6: Expire stale orders (1-tick TTL)
+        let t5 = Instant::now();
+        self.lob.expire_orders_before(self.tick);
+        self.timings.lob_expire += t5.elapsed();
 
         // Record history
-        let new_bbo = self.order_book.bbo();
+        let new_bbo = self.lob.bbo();
         self.price_history.push(new_bbo.last_price);
         self.volume_history.push(trades.iter().map(|t| t.quantity.abs()).sum());
         self.exo_price_history.push(self.exo_price);
+        self.spread_history.push(new_bbo.best_ask - new_bbo.best_bid);
+        self.bid_depth_history.push(self.lob.bids_total_qty());
+        self.ask_depth_history.push(self.lob.asks_total_qty());
 
         self.tick += 1;
     }
@@ -239,6 +277,93 @@ impl Simulation {
     }
 
     pub fn bbo(&self) -> BBO {
-        self.order_book.bbo()
+        let mut bbo = self.lob.bbo();
+        bbo.fair_value = self.exo_price;
+        bbo
     }
+}
+
+/// Convert kernel output orders into LOB orders, handling market maker
+/// two-sided quoting and market order promotion.
+fn convert_orders(
+    order_buffer: &[crate::market::types::Order],
+    agents: &AgentState,
+    tick: u64,
+    market_order_threshold: f32,
+) -> (Vec<u32>, Vec<LobOrder>, Vec<LobOrder>) {
+    let mut cancel_agents = Vec::new();
+    let mut market_orders = Vec::new();
+    let mut limit_orders = Vec::new();
+
+    for order in order_buffer {
+        if order.quantity.abs() < f32::EPSILON {
+            continue;
+        }
+
+        let i = order.agent_id as usize;
+        let is_mm = agents.agent_type[i] == 1;
+
+        if is_mm {
+            // Market maker: cancel old quotes, post two-sided
+            cancel_agents.push(order.agent_id);
+            let half_spread = agents.mm_half_spread[i];
+            let quote_size = agents.mm_quote_size[i];
+            let signal_price = order.price;
+
+            limit_orders.push(LobOrder {
+                order_id: 0,
+                agent_id: order.agent_id,
+                side: Side::Buy,
+                price: signal_price - half_spread,
+                quantity: quote_size,
+                order_type: OrderType::Limit,
+                tick,
+            });
+            limit_orders.push(LobOrder {
+                order_id: 0,
+                agent_id: order.agent_id,
+                side: Side::Sell,
+                price: signal_price + half_spread,
+                quantity: quote_size,
+                order_type: OrderType::Limit,
+                tick,
+            });
+        } else {
+            let side = if order.quantity > 0.0 {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+            let qty = order.quantity.abs();
+
+            // Promote to market order if signal is strong enough
+            let aggression = agents.get_param(i, 0);
+            let is_market = market_order_threshold > 0.0
+                && qty * aggression > market_order_threshold;
+
+            if is_market {
+                market_orders.push(LobOrder {
+                    order_id: 0,
+                    agent_id: order.agent_id,
+                    side,
+                    price: order.price,
+                    quantity: qty,
+                    order_type: OrderType::Market,
+                    tick,
+                });
+            } else {
+                limit_orders.push(LobOrder {
+                    order_id: 0,
+                    agent_id: order.agent_id,
+                    side,
+                    price: order.price,
+                    quantity: qty,
+                    order_type: OrderType::Limit,
+                    tick,
+                });
+            }
+        }
+    }
+
+    (cancel_agents, market_orders, limit_orders)
 }

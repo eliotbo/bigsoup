@@ -50,9 +50,11 @@ class ArchetypeConfig:
     risk_aversion_range: tuple = (0.01, 0.2)
     curvature_range: tuple = (0.5, 2.0)
     midpoint_range: tuple = (5.0, 50.0)
+    mm_half_spread_range: Optional[tuple] = None
+    mm_quote_size_range: Optional[tuple] = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "name": self.name,
             "weight": self.weight,
             "aggression": list(self.aggression_range),
@@ -66,6 +68,11 @@ class ArchetypeConfig:
             "curvature": list(self.curvature_range),
             "midpoint": list(self.midpoint_range),
         }
+        if self.mm_half_spread_range is not None:
+            d["mm_half_spread"] = list(self.mm_half_spread_range)
+        if self.mm_quote_size_range is not None:
+            d["mm_quote_size"] = list(self.mm_quote_size_range)
+        return d
 
 
 # Canonical archetypes matching main.rs defaults.
@@ -109,6 +116,8 @@ MARKET_MAKER = ArchetypeConfig(
     risk_aversion_range=(0.05, 0.2),
     curvature_range=(0.0, 0.0),
     midpoint_range=(3.0, 10.0),
+    mm_half_spread_range=(0.05, 0.2),
+    mm_quote_size_range=(1.0, 5.0),
 )
 
 NOISE_TRADER = ArchetypeConfig(
@@ -140,6 +149,7 @@ class SimConfig:
     fair_value_vol: float = 0.002
     init_bias: float = 0.02
     archetypes: Optional[list] = field(default_factory=lambda: list(DEFAULT_ARCHETYPES))
+    market_order_threshold: float = 0.0
 
     def to_json(self) -> str:
         d = {
@@ -152,6 +162,7 @@ class SimConfig:
             "seed": self.seed,
             "fair_value_vol": self.fair_value_vol,
             "init_bias": self.init_bias,
+            "market_order_threshold": self.market_order_threshold,
         }
         if self.archetypes is not None:
             d["archetypes"] = [a.to_dict() for a in self.archetypes]

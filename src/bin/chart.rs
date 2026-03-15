@@ -114,15 +114,11 @@ fn main() -> anyhow::Result<()> {
     } else {
         SimConfig {
             n_agents: args.agents,
-            initial_price: 100.0,
-            initial_cash: 10_000.0,
-            k: 10,
-            m: 4,
             use_gpu: Some(!args.cpu),
             seed: Some(args.seed),
             fair_value_vol: args.vol,
             init_bias: 0.02,
-            archetypes: None,
+            ..Default::default()
         }
     };
 

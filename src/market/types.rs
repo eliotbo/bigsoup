@@ -26,3 +26,26 @@ pub struct Trade {
     pub quantity: f32,
     pub tick: u64,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderType {
+    Limit,
+    Market,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Buy,
+    Sell,
+}
+
+#[derive(Clone, Debug)]
+pub struct LobOrder {
+    pub order_id: u64,
+    pub agent_id: u32,
+    pub side: Side,
+    pub price: f32,
+    pub quantity: f32,
+    pub order_type: OrderType,
+    pub tick: u64,
+}

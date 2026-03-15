@@ -19,6 +19,12 @@ pub struct Archetype {
     pub risk_aversion:  (f32, f32),
     pub curvature:      (f32, f32),
     pub midpoint:       (f32, f32),
+    /// Market maker half-spread range (min, max). When set, agents use two-sided quoting.
+    #[serde(default)]
+    pub mm_half_spread: Option<(f32, f32)>,
+    /// Market maker quote size range (min, max) per side.
+    #[serde(default)]
+    pub mm_quote_size:  Option<(f32, f32)>,
 }
 
 impl Archetype {

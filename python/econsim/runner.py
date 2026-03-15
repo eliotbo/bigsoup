@@ -98,4 +98,4 @@ if __name__ == "__main__":
     print(f'DSL signal: {c_str}')
 
     config = SimConfig()
-    show_chart(config, n_ticks=1_000_000, strategy=c_str)
+    show_chart(config, n_ticks=10_000, strategy=c_str)

@@ -58,6 +58,34 @@ impl PySimulation {
         self.inner.tick
     }
 
+    fn book_depth(&self) -> usize {
+        self.inner.lob.book_depth()
+    }
+
+    fn spread(&self) -> f32 {
+        self.inner.lob.spread()
+    }
+
+    fn book_bids(&self, n: usize) -> Vec<(f32, f32)> {
+        self.inner.lob.book_bids(n)
+    }
+
+    fn book_asks(&self, n: usize) -> Vec<(f32, f32)> {
+        self.inner.lob.book_asks(n)
+    }
+
+    fn spread_history<'py>(&self, py: Python<'py>) -> Bound<'py, numpy::PyArray1<f32>> {
+        self.inner.spread_history.clone().into_pyarray_bound(py)
+    }
+
+    fn bid_depth_history<'py>(&self, py: Python<'py>) -> Bound<'py, numpy::PyArray1<f32>> {
+        self.inner.bid_depth_history.clone().into_pyarray_bound(py)
+    }
+
+    fn ask_depth_history<'py>(&self, py: Python<'py>) -> Bound<'py, numpy::PyArray1<f32>> {
+        self.inner.ask_depth_history.clone().into_pyarray_bound(py)
+    }
+
     /// Recompile and hot-swap the CUDA kernel with a new signal expression.
     /// The expression should be a C float expression string produced by
     /// `econsim.dsl.compile()`.
