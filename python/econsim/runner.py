@@ -84,12 +84,15 @@ def run_simulation(config: SimConfig = None, n_ticks: int = 1000) -> dict:
 
 
 if __name__ == "__main__":
-    from dsl import Param, State, BboField, Noise, Position, Abs, Exp, signal, compile
+    from dsl import p, s, bbo, noise, pos, exp, abs, signal, compile
 
-    mr = Param("mean_reversion") * (State("fair_value_estimate") - BboField("mid"))
-    tf = Param("trend_follow") * (BboField("mid") - State("ema"))
-    raw = mr + tf + Noise() + (-Param("risk_aversion") * Position())
-    desirability = 1.0 / (1.0 + Exp(Param("curvature") * (Abs(Position()) - Param("midpoint"))))
+    raw = p.mean_reversion * (s.fair_value_estimate - bbo.mid) \
+        + p.trend_follow * (bbo.mid - s.ema) \
+        + noise \
+        + (-p.risk_aversion * pos)
+    
+    desirability = 1.0 / (1.0 + exp(p.curvature * (abs(pos) - p.midpoint)))
+    
     c_str = compile(signal(raw * desirability))
 
     print(f'DSL signal: {c_str}')

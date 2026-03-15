@@ -12,11 +12,21 @@ Available named inputs:
   Position(): current agent position (f32)
   FairValue(): exogenous fundamental value
 
-Example:
+Example (verbose):
     mr   = Param("mean_reversion") * (State("fair_value_estimate") - BboField("mid"))
     tf   = Param("trend_follow")   * (BboField("mid") - State("ema"))
     expr = signal(mr + tf + Noise())
     c_str = compile(expr)  # pass to PySimulation.set_strategy()
+
+Example (ergonomic):
+    from econsim.dsl import p, s, bbo, noise, pos, exp, abs, signal, compile
+
+    raw = p.mean_reversion * (s.fair_value_estimate - bbo.mid) \
+        + p.trend_follow * (bbo.mid - s.ema) \
+        + noise \
+        + (-p.risk_aversion * pos)
+    desirability = 1.0 / (1.0 + exp(p.curvature * (abs(pos) - p.midpoint)))
+    c_str = compile(signal(raw * desirability))
 """
 
 
@@ -249,3 +259,39 @@ def compile(expr):
     The returned string is suitable for passing to PySimulation.set_strategy().
     """
     return expr.to_c()
+
+
+# --- Ergonomic frontend sugar ---
+
+class _Namespace:
+    """Attribute-access namespace that returns DSL nodes.
+
+    Example: p.mean_reversion -> Param("mean_reversion")
+    """
+
+    def __init__(self, cls):
+        self._cls = cls
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._cls(name)
+
+    def __repr__(self):
+        return f"_Namespace({self._cls.__name__})"
+
+
+p = _Namespace(Param)
+s = _Namespace(State)
+bbo = _Namespace(BboField)
+
+noise = Noise()
+pos = Position()
+fair_value = FairValue()
+
+exp = Exp
+
+
+def abs(expr):
+    """DSL abs — returns Abs node. Python's builtin abs() also works on Expr."""
+    return Abs(_wrap(expr))
