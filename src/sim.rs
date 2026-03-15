@@ -47,10 +47,12 @@ pub fn build_simulation(config: SimConfig) -> anyhow::Result<Simulation> {
             // Set up market maker fields if this archetype has them
             if let Some((lo, hi)) = archetype.mm_half_spread {
                 let qs = archetype.mm_quote_size.unwrap_or((1.0, 5.0));
+                let rq = archetype.mm_requote_threshold.unwrap_or((0.0, 0.0));
                 for i in offset..end {
                     agents.agent_type[i] = 1;
                     agents.mm_half_spread[i] = rand::Rng::random_range(&mut rng, lo..=hi);
                     agents.mm_quote_size[i] = rand::Rng::random_range(&mut rng, qs.0..=qs.1);
+                    agents.mm_requote_threshold[i] = rand::Rng::random_range(&mut rng, rq.0..=rq.1);
                 }
             }
             offset = end;
@@ -118,27 +120,41 @@ pub struct SimConfig {
     pub use_gpu: Option<bool>,
     #[serde(default)]
     pub seed: Option<u64>,
+    
     /// Per-tick volatility of the exogenous fundamental price as a fraction of
     /// current price.  0.0 = no exogenous process (default).  Try ~0.002.
     #[serde(default)]
     pub fair_value_vol: f32,
+
     /// Initial disagreement: agent i starts with fair_value_estimate =
     /// initial_price * (1 ± init_bias) alternating bullish/bearish.
     /// 0.0 = all start at initial_price (default).  Try ~0.02.
     #[serde(default)]
     pub init_bias: f32,
+
     /// Agent archetypes with weights and per-parameter ranges.
     /// When provided, agents are partitioned by weight and each group gets
     /// params drawn from that archetype's ranges.
     /// When absent, a single uniform distribution over all agents is used.
     #[serde(default)]
     pub archetypes: Option<Vec<Archetype>>,
+
     /// Minimum |signal| * aggression to submit a market order instead of limit.
     /// 0.0 = disabled (all orders are limit orders).
     #[serde(default)]
     pub market_order_threshold: f32,
+
     /// Minimum |quantity| * aggression for a non-MM agent to participate at all.
     /// 0.0 = everyone participates every tick (default, backward compatible).
+    /// 
+    /// threshold       active    total  pct                                                                       
+    /// 0.0000           9803     9803  100.0%
+    /// 0.0010           9308     9803   95.0%                                                                        
+    /// 0.0050           7283     9803   74.3%                          
+    /// 0.0100           5258     9803   53.6%
+    /// 0.0200           2721     9803   27.8%
+    /// 0.0500            579     9803    5.9%
+    /// 0.1000            122     9803    1.2%
     #[serde(default)]
     pub participation_threshold: f32,
 }
@@ -238,7 +254,7 @@ impl Simulation {
         let t2 = Instant::now();
         let (cancel_agents, market_orders, limit_orders) = convert_orders(
             &self.order_buffer,
-            &self.agents,
+            &mut self.agents,
             self.tick,
             self.market_order_threshold,
             self.participation_threshold,
@@ -296,7 +312,7 @@ impl Simulation {
 /// two-sided quoting and market order promotion.
 fn convert_orders(
     order_buffer: &[crate::market::types::Order],
-    agents: &AgentState,
+    agents: &mut AgentState,
     tick: u64,
     market_order_threshold: f32,
     participation_threshold: f32,
@@ -322,30 +338,37 @@ fn convert_orders(
         }
 
         if is_mm {
-            // Market maker: cancel old quotes, post two-sided
-            cancel_agents.push(order.agent_id);
-            let half_spread = agents.mm_half_spread[i];
-            let quote_size = agents.mm_quote_size[i];
             let signal_price = order.price;
+            let last_mid = agents.mm_last_quote_mid[i];
+            let drift = (signal_price - last_mid).abs();
 
-            limit_orders.push(LobOrder {
-                order_id: 0,
-                agent_id: order.agent_id,
-                side: Side::Buy,
-                price: signal_price - half_spread,
-                quantity: quote_size,
-                order_type: OrderType::Limit,
-                tick,
-            });
-            limit_orders.push(LobOrder {
-                order_id: 0,
-                agent_id: order.agent_id,
-                side: Side::Sell,
-                price: signal_price + half_spread,
-                quantity: quote_size,
-                order_type: OrderType::Limit,
-                tick,
-            });
+            if last_mid == 0.0 || drift > agents.mm_requote_threshold[i] {
+                // Cancel old quotes and post new two-sided quotes
+                cancel_agents.push(order.agent_id);
+                let half_spread = agents.mm_half_spread[i];
+                let quote_size = agents.mm_quote_size[i];
+
+                limit_orders.push(LobOrder {
+                    order_id: 0,
+                    agent_id: order.agent_id,
+                    side: Side::Buy,
+                    price: signal_price - half_spread,
+                    quantity: quote_size,
+                    order_type: OrderType::Limit,
+                    tick: u64::MAX, // MM quotes persist until explicitly cancelled
+                });
+                limit_orders.push(LobOrder {
+                    order_id: 0,
+                    agent_id: order.agent_id,
+                    side: Side::Sell,
+                    price: signal_price + half_spread,
+                    quantity: quote_size,
+                    order_type: OrderType::Limit,
+                    tick: u64::MAX, // MM quotes persist until explicitly cancelled
+                });
+                agents.mm_last_quote_mid[i] = signal_price;
+            }
+            // else: drift is small, keep existing quotes resting
         } else {
             let side = if order.quantity > 0.0 {
                 Side::Buy

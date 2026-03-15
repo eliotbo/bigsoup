@@ -25,6 +25,10 @@ pub struct Archetype {
     /// Market maker quote size range (min, max) per side.
     #[serde(default)]
     pub mm_quote_size:  Option<(f32, f32)>,
+    /// MM requote threshold range (min, max). MM only cancels+requotes when
+    /// |new_signal - last_quote_mid| > threshold. None = always requote (0.0).
+    #[serde(default)]
+    pub mm_requote_threshold: Option<(f32, f32)>,
 }
 
 impl Archetype {

@@ -15,6 +15,10 @@ pub struct AgentState {
     pub mm_half_spread: Vec<f32>,
     /// Market maker quote size per side (CPU-only)
     pub mm_quote_size: Vec<f32>,
+    /// Signal price each MM last quoted around (0.0 = force requote on first tick)
+    pub mm_last_quote_mid: Vec<f32>,
+    /// Per-agent requote threshold: only cancel+requote when drift exceeds this
+    pub mm_requote_threshold: Vec<f32>,
 }
 
 impl AgentState {
@@ -30,6 +34,8 @@ impl AgentState {
             agent_type: vec![0; n],
             mm_half_spread: vec![0.0; n],
             mm_quote_size: vec![0.0; n],
+            mm_last_quote_mid: vec![0.0; n],
+            mm_requote_threshold: vec![0.0; n],
         }
     }
 

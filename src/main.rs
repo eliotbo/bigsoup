@@ -18,7 +18,7 @@ fn main() {
         init_bias: 0.02,       // ±2% initial fair-value disagreement between agents
         archetypes: None,      // main.rs manages archetypes directly below
         market_order_threshold: 0.0,
-        participation_threshold: 0.5,
+        participation_threshold: 0.1, // 0.1 -> 1% partcipation rate for market takers
     };
 
     let n_agents = config.n_agents;
@@ -61,6 +61,7 @@ fn main() {
             midpoint:       (5.0, 20.0),
             mm_half_spread: None,
             mm_quote_size:  None,
+            mm_requote_threshold: None,
         },
         Archetype {
             name: "trend_follower".to_string(), weight: 0.3,
@@ -76,6 +77,7 @@ fn main() {
             midpoint:       (15.0, 50.0),
             mm_half_spread: None,
             mm_quote_size:  None,
+            mm_requote_threshold: None,
         },
         Archetype {
             name: "market_maker".to_string(), weight: 0.2,
@@ -91,6 +93,7 @@ fn main() {
             midpoint:       (3.0, 10.0),
             mm_half_spread: Some((0.05, 0.2)),
             mm_quote_size:  Some((1.0, 5.0)),
+            mm_requote_threshold: Some((0.05, 0.2)),
         },
         Archetype {
             name: "noise_trader".to_string(), weight: 0.2,
@@ -106,6 +109,7 @@ fn main() {
             midpoint:       (10.0, 50.0),
             mm_half_spread: None,
             mm_quote_size:  None,
+            mm_requote_threshold: None,
         },
     ];
 
@@ -124,10 +128,12 @@ fn main() {
         // Set up market maker fields
         if let Some((lo, hi)) = archetype.mm_half_spread {
             let qs = archetype.mm_quote_size.unwrap_or((1.0, 5.0));
+            let rq = archetype.mm_requote_threshold.unwrap_or((0.0, 0.0));
             for i in offset..end {
                 agents.agent_type[i] = 1;
                 agents.mm_half_spread[i] = lo + (hi - lo) * rand::Rng::random::<f32>(&mut rng);
                 agents.mm_quote_size[i] = qs.0 + (qs.1 - qs.0) * rand::Rng::random::<f32>(&mut rng);
+                agents.mm_requote_threshold[i] = rq.0 + (rq.1 - rq.0) * rand::Rng::random::<f32>(&mut rng);
             }
         }
         println!("  {} agents [{}-{}): {}", archetype.name, offset, end, end - offset);

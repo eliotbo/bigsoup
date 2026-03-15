@@ -52,6 +52,7 @@ class ArchetypeConfig:
     midpoint_range: tuple = (5.0, 50.0)
     mm_half_spread_range: Optional[tuple] = None
     mm_quote_size_range: Optional[tuple] = None
+    mm_requote_threshold_range: Optional[tuple] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -72,6 +73,8 @@ class ArchetypeConfig:
             d["mm_half_spread"] = list(self.mm_half_spread_range)
         if self.mm_quote_size_range is not None:
             d["mm_quote_size"] = list(self.mm_quote_size_range)
+        if self.mm_requote_threshold_range is not None:
+            d["mm_requote_threshold"] = list(self.mm_requote_threshold_range)
         return d
 
 
@@ -118,6 +121,7 @@ MARKET_MAKER = ArchetypeConfig(
     midpoint_range=(3.0, 10.0),
     mm_half_spread_range=(0.05, 0.2),
     mm_quote_size_range=(1.0, 5.0),
+    mm_requote_threshold_range=(0.05, 0.2),
 )
 
 NOISE_TRADER = ArchetypeConfig(
