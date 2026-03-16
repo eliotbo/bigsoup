@@ -6,8 +6,11 @@ use econsim::sim::{SimConfig, Simulation};
 use rand::SeedableRng;
 
 fn main() {
+    let n_ticks = 1000;
+
+    
     let config = SimConfig {
-        n_agents: 100_000,
+        n_agents: 1_000_000,
         initial_price: 100.0,
         initial_cash: 10_000.0,
         k: 10,
@@ -163,7 +166,7 @@ fn main() {
     };
     let mut sim = Simulation::new(config, engine, agents);
 
-    let n_ticks = 1000;
+    
     let engine_name = if use_gpu { "GPU engine" } else { "CPU engine" };
     println!("econsim: running {} ticks with {} agents ({})", n_ticks, n_agents, engine_name);
 

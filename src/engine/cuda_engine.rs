@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
-use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PinnedHostSlice, PushKernelArg};
 use cudarc::nvrtc::compile_ptx;
 use crate::agent::state::AgentState;
 use crate::market::types::{BBO, Order};
@@ -29,7 +29,7 @@ pub struct CudaEngine {
     m: usize,
     block_size: u32,
     // Pre-allocated host staging buffers reused every tick
-    h_pos_f32: Vec<f32>,
+    h_pos_f32: PinnedHostSlice<f32>,   // WC pinned: CPU writes, GPU reads (upload)
     h_prices: Vec<f32>,
     h_qtys: Vec<f32>,
 }
@@ -76,7 +76,7 @@ impl CudaEngine {
         stream.synchronize()?;
 
         Ok(Self {
-            ctx,
+            ctx: ctx.clone(),
             stream,
             d_position,
             d_cash,
@@ -89,7 +89,14 @@ impl CudaEngine {
             k,
             m,
             block_size: 256,
-            h_pos_f32: vec![0.0f32; n],
+            h_pos_f32: {
+                let mut buf = unsafe { ctx.alloc_pinned::<f32>(n) }?;
+                let s = buf.as_mut_slice()?;
+                for (dst, &src) in s.iter_mut().zip(agents.position.iter()) {
+                    *dst = src as f32;
+                }
+                buf
+            },
             h_prices: vec![0.0f32; n],
             h_qtys: vec![0.0f32; n],
         })
@@ -122,8 +129,13 @@ impl SimEngine for CudaEngine {
     ) -> (usize, GpuStepTimings) {
         // --- Phase 5: GPU upload ---
         let t0 = Instant::now();
-        for (dst, &src) in self.h_pos_f32.iter_mut().zip(agents.position.iter()) {
-            *dst = src as f32;
+        {
+            // as_mut_slice() blocks until any in-flight DMA using this buffer is done,
+            // preventing us from overwriting it while the previous tick's transfer is live.
+            let pos_slice = self.h_pos_f32.as_mut_slice().unwrap();
+            for (dst, &src) in pos_slice.iter_mut().zip(agents.position.iter()) {
+                *dst = src as f32;
+            }
         }
         self.stream.memcpy_htod(&self.h_pos_f32, &mut self.d_position).unwrap();
         let upload_time = t0.elapsed();
