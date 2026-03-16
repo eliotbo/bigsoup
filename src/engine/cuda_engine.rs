@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Instant;
-use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, HostSlice, LaunchConfig, PinnedHostSlice, PushKernelArg, SyncOnDrop};
+use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, DevicePtr, DeviceRepr, HostSlice, LaunchConfig, PinnedHostSlice, PushKernelArg, SyncOnDrop, ValidAsZeroBits};
 use cudarc::nvrtc::compile_ptx;
 use crate::agent::state::AgentState;
-use crate::market::types::{BBO, Order};
+use crate::market::types::{BBO, LobOrder, OrderType, Side};
 use super::{GpuStepTimings, SimEngine};
 
 /// Page-locked (pinned) host memory **without** `CU_MEMHOSTALLOC_WRITECOMBINED`.
@@ -11,11 +11,6 @@ use super::{GpuStepTimings, SimEngine};
 /// `PinnedHostSlice` (cudarc's built-in) always sets the WC flag, which makes CPU
 /// reads slow (bypasses L1/L2 cache). This wrapper uses flags=0 so the memory is
 /// cache-coherent — correct for DtoH transfers where the CPU reads results immediately.
-///
-/// If this causes problems, revert to `Vec<f32>` for `h_prices`/`h_qtys` in
-/// `CudaEngine` and change the two `memcpy_dtoh` calls in `step()` back to writing
-/// into a plain `Vec`. The only loss is the CUDA staging-buffer round-trip on each
-/// download.
 struct PinnedReadableSlice<T> {
     ptr: *mut T,
     len: usize,
@@ -72,6 +67,24 @@ impl<T> HostSlice<T> for PinnedReadableSlice<T> {
 
 const KERNEL_SRC: &str = include_str!("../../kernels/decide.cu");
 const TEMPLATE_SRC: &str = include_str!("../../kernels/decide_template.cu");
+const CLASSIFY_SRC: &str = include_str!("../../kernels/classify.cu");
+const COMPACT_SRC: &str = include_str!("../../kernels/compact.cu");
+
+/// Mirrors `struct CompactOrder` in kernels/compact.cu (must stay in sync).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CompactOrder {
+    agent_id:    u32,
+    order_type:  i32,
+    bid_price:   f32,
+    ask_price:   f32,
+    qty:         f32,
+    cancel_flag: i32,
+}
+
+// Safety: all fields are primitive types; zero is a valid bit pattern.
+unsafe impl DeviceRepr for CompactOrder {}
+unsafe impl ValidAsZeroBits for CompactOrder {}
 
 /// Default signal expression matching the hardcoded logic in decide.cu.
 #[allow(dead_code)]
@@ -81,21 +94,45 @@ const DEFAULT_SIGNAL_EXPR: &str =
 pub struct CudaEngine {
     ctx: Arc<CudaContext>,
     stream: Arc<CudaStream>,
+    // Agent state (GPU-resident)
     d_position: CudaSlice<f32>,
     d_cash: CudaSlice<f32>,
     d_strategy_params: CudaSlice<f32>,
     d_internal_state: CudaSlice<f32>,
+    // Intermediate buffers: agent_decide writes, classify reads (never cross PCIe)
     d_order_price: CudaSlice<f32>,
     d_order_quantity: CudaSlice<f32>,
-    func: CudaFunction,
+    // MM agent arrays (GPU-resident, uploaded once at init)
+    d_agent_type: CudaSlice<i32>,
+    d_mm_half_spread: CudaSlice<f32>,
+    d_mm_quote_size: CudaSlice<f32>,
+    d_mm_requote_threshold: CudaSlice<f32>,
+    d_mm_last_quote_mid: CudaSlice<f32>,  // also written by classify kernel
+    // Classified output (GPU)
+    d_out_order_type: CudaSlice<i32>,
+    d_out_bid_price: CudaSlice<f32>,
+    d_out_ask_price: CudaSlice<f32>,
+    d_out_qty: CudaSlice<f32>,
+    d_out_cancel_flag: CudaSlice<i32>,
+    // Kernels
+    decide_func: CudaFunction,
+    classify_func: CudaFunction,
+    compact_func: CudaFunction,
     n: usize,
     k: usize,
     m: usize,
     block_size: u32,
+    // Classification scalar uniforms
+    participation_threshold: f32,
+    market_order_threshold: f32,
+    tick_size: f32,
     // Pre-allocated host staging buffers reused every tick
-    h_pos_f32: PinnedHostSlice<f32>,        // WC pinned: CPU writes, GPU reads (upload)
-    h_prices: PinnedReadableSlice<f32>,     // non-WC pinned: GPU writes, CPU reads (download)
-    h_qtys: PinnedReadableSlice<f32>,       // non-WC pinned: GPU writes, CPU reads (download)
+    h_pos_f32: PinnedHostSlice<f32>,           // WC pinned: CPU writes, GPU reads (upload)
+    // Compacted output (dense, only active entries) — replaces full N-sized h_out_* buffers
+    d_compact: CudaSlice<CompactOrder>,        // device: packed active entries (max N)
+    d_active_count: CudaSlice<u32>,            // device: scalar count, zeroed before each tick
+    h_compact: PinnedReadableSlice<CompactOrder>, // host: DtoH destination (max N entries)
+    h_active_count: PinnedReadableSlice<u32>,  // host: DtoH destination for count scalar
 }
 
 impl CudaEngine {
@@ -108,11 +145,32 @@ impl CudaEngine {
         Ok(func)
     }
 
-    pub fn new(device_id: usize, agents: &AgentState, signal_expr: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+    fn compile_classify(ctx: &Arc<CudaContext>) -> Result<CudaFunction, Box<dyn std::error::Error>> {
+        let ptx = compile_ptx(CLASSIFY_SRC)?;
+        let module = ctx.load_module(ptx)?;
+        let func = module.load_function("classify_orders")?;
+        Ok(func)
+    }
+
+    fn compile_compact(ctx: &Arc<CudaContext>) -> Result<CudaFunction, Box<dyn std::error::Error>> {
+        let ptx = compile_ptx(COMPACT_SRC)?;
+        let module = ctx.load_module(ptx)?;
+        let func = module.load_function("compact_orders")?;
+        Ok(func)
+    }
+
+    pub fn new(
+        device_id: usize,
+        agents: &AgentState,
+        signal_expr: Option<&str>,
+        participation_threshold: f32,
+        market_order_threshold: f32,
+        tick_size: f32,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let ctx = CudaContext::new(device_id)?;
         let stream = ctx.default_stream();
 
-        let func = match signal_expr {
+        let decide_func = match signal_expr {
             Some(expr) => Self::compile_kernel(&ctx, TEMPLATE_SRC, expr)?,
             None => {
                 // Use the original kernel for exact backward compatibility
@@ -121,6 +179,8 @@ impl CudaEngine {
                 module.load_function("agent_decide")?
             }
         };
+        let classify_func = Self::compile_classify(&ctx)?;
+        let compact_func = Self::compile_compact(&ctx)?;
 
         let n = agents.n;
         let k = agents.k;
@@ -137,6 +197,25 @@ impl CudaEngine {
         let d_order_price = stream.alloc_zeros::<f32>(n)?;
         let d_order_quantity = stream.alloc_zeros::<f32>(n)?;
 
+        // Upload MM agent arrays (cast agent_type u8 -> i32 for GPU alignment)
+        let agent_type_i32: Vec<i32> = agents.agent_type.iter().map(|&x| x as i32).collect();
+        let d_agent_type = stream.memcpy_stod(&agent_type_i32)?;
+        let d_mm_half_spread = stream.memcpy_stod(&agents.mm_half_spread)?;
+        let d_mm_quote_size = stream.memcpy_stod(&agents.mm_quote_size)?;
+        let d_mm_requote_threshold = stream.memcpy_stod(&agents.mm_requote_threshold)?;
+        let d_mm_last_quote_mid = stream.memcpy_stod(&agents.mm_last_quote_mid)?;
+
+        // Classified output GPU buffers
+        let d_out_order_type = stream.alloc_zeros::<i32>(n)?;
+        let d_out_bid_price = stream.alloc_zeros::<f32>(n)?;
+        let d_out_ask_price = stream.alloc_zeros::<f32>(n)?;
+        let d_out_qty = stream.alloc_zeros::<f32>(n)?;
+        let d_out_cancel_flag = stream.alloc_zeros::<i32>(n)?;
+
+        // Compact output buffers (device + host), sized to worst case N
+        let d_compact = stream.alloc_zeros::<CompactOrder>(n)?;
+        let d_active_count = stream.alloc_zeros::<u32>(1)?;
+
         stream.synchronize()?;
 
         Ok(Self {
@@ -148,11 +227,26 @@ impl CudaEngine {
             d_internal_state,
             d_order_price,
             d_order_quantity,
-            func,
+            d_agent_type,
+            d_mm_half_spread,
+            d_mm_quote_size,
+            d_mm_requote_threshold,
+            d_mm_last_quote_mid,
+            d_out_order_type,
+            d_out_bid_price,
+            d_out_ask_price,
+            d_out_qty,
+            d_out_cancel_flag,
+            decide_func,
+            classify_func,
+            compact_func,
             n,
             k,
             m,
             block_size: 256,
+            participation_threshold,
+            market_order_threshold,
+            tick_size,
             h_pos_f32: {
                 let mut buf = unsafe { ctx.alloc_pinned::<f32>(n) }?;
                 let s = buf.as_mut_slice()?;
@@ -161,8 +255,10 @@ impl CudaEngine {
                 }
                 buf
             },
-            h_prices: PinnedReadableSlice::new(&ctx, n)?,
-            h_qtys: PinnedReadableSlice::new(&ctx, n)?,
+            d_compact,
+            d_active_count,
+            h_compact: PinnedReadableSlice::new(&ctx, n)?,
+            h_active_count: PinnedReadableSlice::new(&ctx, 1)?,
         })
     }
 
@@ -173,13 +269,22 @@ impl CudaEngine {
         self.stream.memcpy_htod(&cash_f32, &mut self.d_cash)?;
         self.stream.memcpy_htod(agents.strategy_params.as_slice(), &mut self.d_strategy_params)?;
         self.stream.memcpy_htod(agents.internal_state.as_slice(), &mut self.d_internal_state)?;
+        // Re-upload MM arrays
+        let agent_type_i32: Vec<i32> = agents.agent_type.iter().map(|&x| x as i32).collect();
+        self.stream.memcpy_htod(&agent_type_i32, &mut self.d_agent_type)?;
+        self.stream.memcpy_htod(&agents.mm_half_spread, &mut self.d_mm_half_spread)?;
+        self.stream.memcpy_htod(&agents.mm_quote_size, &mut self.d_mm_quote_size)?;
+        self.stream.memcpy_htod(&agents.mm_requote_threshold, &mut self.d_mm_requote_threshold)?;
+        self.stream.memcpy_htod(&agents.mm_last_quote_mid, &mut self.d_mm_last_quote_mid)?;
         Ok(())
     }
 
     pub fn download_agents(&self, agents: &mut AgentState) -> Result<(), Box<dyn std::error::Error>> {
         let internal_state = self.stream.memcpy_dtov(&self.d_internal_state)?;
+        let mm_last_quote_mid = self.stream.memcpy_dtov(&self.d_mm_last_quote_mid)?;
         self.stream.synchronize()?;
         agents.internal_state.copy_from_slice(&internal_state);
+        agents.mm_last_quote_mid.copy_from_slice(&mm_last_quote_mid);
         Ok(())
     }
 }
@@ -189,13 +294,18 @@ impl SimEngine for CudaEngine {
         &mut self,
         agents: &mut AgentState,
         bbo: &BBO,
-        order_buffer: &mut Vec<Order>,
+        tick: u64,
+        cancel_agents: &mut Vec<u32>,
+        market_orders: &mut Vec<LobOrder>,
+        limit_orders: &mut Vec<LobOrder>,
     ) -> (usize, GpuStepTimings) {
-        // --- Phase 5: GPU upload ---
+        cancel_agents.clear();
+        market_orders.clear();
+        limit_orders.clear();
+
+        // --- GPU upload (position only, rest is GPU-resident) ---
         let t0 = Instant::now();
         {
-            // as_mut_slice() blocks until any in-flight DMA using this buffer is done,
-            // preventing us from overwriting it while the previous tick's transfer is live.
             let pos_slice = self.h_pos_f32.as_mut_slice().unwrap();
             for (dst, &src) in pos_slice.iter_mut().zip(agents.position.iter()) {
                 *dst = src as f32;
@@ -221,11 +331,15 @@ impl SimEngine for CudaEngine {
         let k_i32 = self.k as i32;
         let m_i32 = self.m as i32;
 
-        // --- Phase 6: GPU kernel launch ---
+        // --- GPU kernel: agent_decide ---
         let t1 = Instant::now();
+
+        // Reset active_count to 0 before compact kernel (async on same stream)
+        self.stream.memset_zeros(&mut self.d_active_count).unwrap();
+
         unsafe {
             self.stream
-                .launch_builder(&self.func)
+                .launch_builder(&self.decide_func)
                 .arg(&best_bid)
                 .arg(&best_ask)
                 .arg(&last_price)
@@ -242,28 +356,137 @@ impl SimEngine for CudaEngine {
                 .launch(cfg)
         }
         .unwrap();
+
+        // --- GPU kernel: classify_orders (same stream, no synchronize between) ---
+        let participation_threshold = self.participation_threshold;
+        let market_order_threshold = self.market_order_threshold;
+        let tick_size_val = self.tick_size;
+        unsafe {
+            self.stream
+                .launch_builder(&self.classify_func)
+                .arg(&self.d_order_price)
+                .arg(&self.d_order_quantity)
+                .arg(&self.d_agent_type)
+                .arg(&self.d_strategy_params)
+                .arg(&self.d_mm_half_spread)
+                .arg(&self.d_mm_quote_size)
+                .arg(&self.d_mm_requote_threshold)
+                .arg(&mut self.d_mm_last_quote_mid)
+                .arg(&mut self.d_out_order_type)
+                .arg(&mut self.d_out_bid_price)
+                .arg(&mut self.d_out_ask_price)
+                .arg(&mut self.d_out_qty)
+                .arg(&mut self.d_out_cancel_flag)
+                .arg(&participation_threshold)
+                .arg(&market_order_threshold)
+                .arg(&tick_size_val)
+                .arg(&n_i32)
+                .arg(&k_i32)
+                .launch(cfg)
+        }
+        .unwrap();
+
+        // --- GPU kernel: compact_orders (same stream, no synchronize between) ---
+        unsafe {
+            self.stream
+                .launch_builder(&self.compact_func)
+                .arg(&self.d_out_order_type)
+                .arg(&self.d_out_bid_price)
+                .arg(&self.d_out_ask_price)
+                .arg(&self.d_out_qty)
+                .arg(&self.d_out_cancel_flag)
+                .arg(&mut self.d_compact)
+                .arg(&mut self.d_active_count)
+                .arg(&n_i32)
+                .launch(cfg)
+        }
+        .unwrap();
+
+        // Synchronize to get accurate kernel execution time (launches are async)
+        self.stream.synchronize().unwrap();
         let kernel_time = t1.elapsed();
 
-        // --- Phase 7: GPU download ---
+        // --- GPU download: active count (4 bytes) then compact buffer (M * 24 bytes) ---
         let t2 = Instant::now();
-        self.stream.memcpy_dtoh(&self.d_order_price, &mut self.h_prices).unwrap();
-        self.stream.memcpy_dtoh(&self.d_order_quantity, &mut self.h_qtys).unwrap();
 
-        // Block until all async GPU work is complete before using the results
+        // 1. Download scalar count and synchronize so we know M.
+        self.stream.memcpy_dtoh(&self.d_active_count, &mut self.h_active_count).unwrap();
         self.stream.synchronize().unwrap();
+        let active_m = self.h_active_count.as_slice()[0] as usize;
+
+        // 2. Partial download: only active_m entries from d_compact.
+        //    Use raw async DtoH with explicit byte count instead of full-N copy.
+        if active_m > 0 {
+            let (d_ptr, _guard) = self.d_compact.device_ptr(&self.stream);
+            let dst_slice = unsafe {
+                std::slice::from_raw_parts_mut(self.h_compact.ptr, active_m)
+            };
+            unsafe {
+                cudarc::driver::result::memcpy_dtoh_async(dst_slice, d_ptr, self.stream.cu_stream())
+                    .unwrap();
+            }
+            self.stream.synchronize().unwrap();
+        }
+
         let download_time = t2.elapsed();
 
-        // Build order buffer
-        order_buffer.clear();
-        order_buffer.reserve(self.n);
-        let prices = self.h_prices.as_slice();
-        let qtys = self.h_qtys.as_slice();
-        for i in 0..self.n {
-            order_buffer.push(Order {
-                agent_id: i as u32,
-                price: prices[i],
-                quantity: qtys[i],
-            });
+        // Sort by agent_id to restore deterministic processing order (atomicAdd
+        // in compact kernel is non-deterministic across warps).
+        let compact = unsafe { std::slice::from_raw_parts_mut(self.h_compact.ptr, active_m) };
+        compact.sort_unstable_by_key(|e| e.agent_id);
+
+        // Build LOB orders from compact entries
+        for entry in compact.iter() {
+            let otype    = entry.order_type;
+            let agent_id = entry.agent_id;
+
+            if entry.cancel_flag != 0 {
+                cancel_agents.push(agent_id);
+            }
+
+            // MM requote: cancel_flag=1, both bid and ask prices present
+            if entry.cancel_flag != 0 && entry.ask_price != 0.0 {
+                limit_orders.push(LobOrder {
+                    order_id: 0,
+                    agent_id,
+                    side: Side::Buy,
+                    price: entry.bid_price,
+                    quantity: entry.qty,
+                    order_type: OrderType::Limit,
+                    tick: u64::MAX,
+                });
+                limit_orders.push(LobOrder {
+                    order_id: 0,
+                    agent_id,
+                    side: Side::Sell,
+                    price: entry.ask_price,
+                    quantity: entry.qty,
+                    order_type: OrderType::Limit,
+                    tick: u64::MAX,
+                });
+            } else {
+                // Non-MM order: route to market_orders or limit_orders
+                let (side, order_type_val) = match otype {
+                    1 => (Side::Buy, OrderType::Limit),
+                    2 => (Side::Sell, OrderType::Limit),
+                    3 => (Side::Buy, OrderType::Market),
+                    4 => (Side::Sell, OrderType::Market),
+                    _ => continue,
+                };
+                let order = LobOrder {
+                    order_id: 0,
+                    agent_id,
+                    side,
+                    price: entry.bid_price,
+                    quantity: entry.qty,
+                    order_type: order_type_val,
+                    tick,
+                };
+                match order_type_val {
+                    OrderType::Market => market_orders.push(order),
+                    OrderType::Limit => limit_orders.push(order),
+                }
+            }
         }
 
         let gpu_timings = GpuStepTimings {
@@ -276,7 +499,7 @@ impl SimEngine for CudaEngine {
 
     fn reload_kernel(&mut self, signal_expr: &str) -> Result<(), Box<dyn std::error::Error>> {
         let func = Self::compile_kernel(&self.ctx, TEMPLATE_SRC, signal_expr)?;
-        self.func = func;
+        self.decide_func = func;
         Ok(())
     }
 }

@@ -4,7 +4,7 @@ pub mod cuda_engine;
 use std::time::Duration;
 
 use crate::agent::state::AgentState;
-use crate::market::types::{BBO, Order};
+use crate::market::types::{BBO, LobOrder};
 
 /// Per-tick GPU sub-phase timings. All zeroes for CPU engine.
 #[derive(Default, Clone, Copy)]
@@ -15,13 +15,17 @@ pub struct GpuStepTimings {
 }
 
 pub trait SimEngine: Send {
-    /// Run one tick: agents observe BBO, decide, emit orders.
-    /// Writes into order_buffer. Returns (number of valid orders, GPU timings).
+    /// Run one tick: agents observe BBO, decide, classify orders.
+    /// Writes classified output into cancel_agents / market_orders / limit_orders.
+    /// Returns (number of agents processed, GPU timings).
     fn step(
         &mut self,
         agents: &mut AgentState,
         bbo: &BBO,
-        order_buffer: &mut Vec<Order>,
+        tick: u64,
+        cancel_agents: &mut Vec<u32>,
+        market_orders: &mut Vec<LobOrder>,
+        limit_orders: &mut Vec<LobOrder>,
     ) -> (usize, GpuStepTimings);
 
     /// Recompile the kernel with a new signal expression (DSL).

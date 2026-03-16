@@ -6,7 +6,7 @@ use crate::agent::state::AgentState;
 use crate::archetypes::Archetype;
 use crate::engine::SimEngine;
 use crate::market::lob::LimitOrderBook;
-use crate::market::types::{BBO, LobOrder, OrderType, Side};
+use crate::market::types::{BBO, LobOrder};
 
 /// Build a `Simulation` from a `SimConfig`, initialising agents and selecting
 /// the GPU or CPU engine automatically.
@@ -80,15 +80,28 @@ pub fn build_simulation(config: SimConfig) -> anyhow::Result<Simulation> {
 
     let use_gpu = config.use_gpu.unwrap_or(true);
     let engine: Box<dyn SimEngine> = if use_gpu {
-        match crate::engine::cuda_engine::CudaEngine::new(0, &agents, None) {
+        match crate::engine::cuda_engine::CudaEngine::new(
+            0, &agents, None,
+            config.participation_threshold,
+            config.market_order_threshold,
+            config.tick_size,
+        ) {
             Ok(e) => Box::new(e),
             Err(err) => {
                 eprintln!("CUDA unavailable ({err}), falling back to CPU");
-                Box::new(crate::engine::cpu_engine::CpuEngine)
+                Box::new(crate::engine::cpu_engine::CpuEngine::new(
+                    config.participation_threshold,
+                    config.market_order_threshold,
+                    config.tick_size,
+                ))
             }
         }
     } else {
-        Box::new(crate::engine::cpu_engine::CpuEngine)
+        Box::new(crate::engine::cpu_engine::CpuEngine::new(
+            config.participation_threshold,
+            config.market_order_threshold,
+            config.tick_size,
+        ))
     };
 
     Ok(Simulation::new(config, engine, agents))
@@ -99,7 +112,6 @@ pub fn build_simulation(config: SimConfig) -> anyhow::Result<Simulation> {
 pub struct StepTimings {
     pub exo_price:      Duration,
     pub agent_decide:   Duration,
-    pub order_convert:  Duration,
     pub lob_match:      Duration,
     pub fill_apply:     Duration,
     pub lob_expire:     Duration,
@@ -120,7 +132,7 @@ pub struct SimConfig {
     pub use_gpu: Option<bool>,
     #[serde(default)]
     pub seed: Option<u64>,
-    
+
     /// Per-tick volatility of the exogenous fundamental price as a fraction of
     /// current price.  0.0 = no exogenous process (default).  Try ~0.002.
     #[serde(default)]
@@ -202,22 +214,17 @@ pub struct Simulation {
     pub exo_price: f32,
     pub timings: StepTimings,
     fair_value_vol: f32,
-    market_order_threshold: f32,
-    participation_threshold: f32,
-    tick_size: f32,
     rng: rand::rngs::StdRng,
-    order_buffer: Vec<crate::market::types::Order>,
+    cancel_agents: Vec<u32>,
+    market_orders: Vec<LobOrder>,
+    limit_orders: Vec<LobOrder>,
     trade_buffer: Vec<crate::market::types::Trade>,
 }
 
 impl Simulation {
     pub fn new(config: SimConfig, engine: Box<dyn SimEngine>, agents: AgentState) -> Self {
-        let n = agents.n;
         let exo_price = config.initial_price;
         let fair_value_vol = config.fair_value_vol;
-        let market_order_threshold = config.market_order_threshold;
-        let participation_threshold = config.participation_threshold;
-        let tick_size = config.tick_size;
         let rng = rand::rngs::StdRng::seed_from_u64(config.seed.unwrap_or(42));
         Self {
             agents,
@@ -233,11 +240,10 @@ impl Simulation {
             exo_price,
             timings: StepTimings::default(),
             fair_value_vol,
-            market_order_threshold,
-            participation_threshold,
-            tick_size,
             rng,
-            order_buffer: Vec::with_capacity(n),
+            cancel_agents: Vec::new(),
+            market_orders: Vec::new(),
+            limit_orders: Vec::new(),
             trade_buffer: Vec::new(),
         }
     }
@@ -256,30 +262,23 @@ impl Simulation {
         let mut bbo = self.lob.bbo();
         bbo.fair_value = self.exo_price;
 
-        // Phase 2: Engine step (agents observe + decide + emit)
+        // Phase 2+3: Engine step (agents decide + classify orders on GPU/CPU)
         let t1 = Instant::now();
-        let (_, gpu) = self.engine.step(&mut self.agents, &bbo, &mut self.order_buffer);
+        let (_, gpu) = self.engine.step(
+            &mut self.agents, &bbo, self.tick,
+            &mut self.cancel_agents, &mut self.market_orders, &mut self.limit_orders,
+        );
         self.timings.agent_decide += t1.elapsed();
         self.timings.gpu_upload   += gpu.upload;
         self.timings.gpu_kernel   += gpu.kernel;
         self.timings.gpu_download += gpu.download;
 
-        // Phase 3: Convert kernel orders to LOB orders
-        let t2 = Instant::now();
-        let (cancel_agents, market_orders, limit_orders) = convert_orders(
-            &self.order_buffer,
-            &mut self.agents,
-            self.tick,
-            self.market_order_threshold,
-            self.participation_threshold,
-            self.tick_size,
-        );
-        self.timings.order_convert += t2.elapsed();
-
         // Phase 4: Process tick on LOB (cancel, match, rest)
         let t3 = Instant::now();
         self.trade_buffer.clear();
-        self.lob.process_tick(&cancel_agents, market_orders, limit_orders, self.tick, &mut self.trade_buffer);
+        let market = std::mem::take(&mut self.market_orders);
+        let limit = std::mem::take(&mut self.limit_orders);
+        self.lob.process_tick(&self.cancel_agents, market, limit, self.tick, &mut self.trade_buffer);
         self.timings.lob_match += t3.elapsed();
 
         // Phase 5: Apply fills to agent positions/cash (f64 accumulation for precision)
@@ -322,117 +321,4 @@ impl Simulation {
         bbo.fair_value = self.exo_price;
         bbo
     }
-}
-
-/// Round `price` to the nearest multiple of `tick_size`.
-/// When tick_size is 0.0 the price is returned unchanged.
-#[inline]
-fn round_tick(price: f32, tick_size: f32) -> f32 {
-    if tick_size == 0.0 {
-        price
-    } else {
-        (price / tick_size).round() * tick_size
-    }
-}
-
-/// Convert kernel output orders into LOB orders, handling market maker
-/// two-sided quoting and market order promotion.
-fn convert_orders(
-    order_buffer: &[crate::market::types::Order],
-    agents: &mut AgentState,
-    tick: u64,
-    market_order_threshold: f32,
-    participation_threshold: f32,
-    tick_size: f32,
-) -> (Vec<u32>, Vec<LobOrder>, Vec<LobOrder>) {
-    let mut cancel_agents = Vec::new();
-    let mut market_orders = Vec::new();
-    let mut limit_orders = Vec::new();
-
-    for order in order_buffer {
-        if order.quantity.abs() < f32::EPSILON {
-            continue;
-        }
-
-        let i = order.agent_id as usize;
-        let is_mm = agents.agent_type[i] == 1;
-
-        // Non-MM agents with weak signals sit out entirely
-        if !is_mm
-            && participation_threshold > 0.0
-            && order.quantity.abs() * agents.get_param(i, 0) < participation_threshold
-        {
-            continue;
-        }
-
-        if is_mm {
-            let signal_price = order.price;
-            let last_mid = agents.mm_last_quote_mid[i];
-            let drift = (signal_price - last_mid).abs();
-
-            if last_mid == 0.0 || drift > agents.mm_requote_threshold[i] {
-                // Cancel old quotes and post new two-sided quotes
-                cancel_agents.push(order.agent_id);
-                let half_spread = agents.mm_half_spread[i];
-                let quote_size = agents.mm_quote_size[i];
-
-                limit_orders.push(LobOrder {
-                    order_id: 0,
-                    agent_id: order.agent_id,
-                    side: Side::Buy,
-                    price: round_tick(signal_price - half_spread, tick_size),
-                    quantity: quote_size,
-                    order_type: OrderType::Limit,
-                    tick: u64::MAX, // MM quotes persist until explicitly cancelled
-                });
-                limit_orders.push(LobOrder {
-                    order_id: 0,
-                    agent_id: order.agent_id,
-                    side: Side::Sell,
-                    price: round_tick(signal_price + half_spread, tick_size),
-                    quantity: quote_size,
-                    order_type: OrderType::Limit,
-                    tick: u64::MAX, // MM quotes persist until explicitly cancelled
-                });
-                agents.mm_last_quote_mid[i] = signal_price;
-            }
-            // else: drift is small, keep existing quotes resting
-        } else {
-            let side = if order.quantity > 0.0 {
-                Side::Buy
-            } else {
-                Side::Sell
-            };
-            let qty = order.quantity.abs();
-
-            // Promote to market order if signal is strong enough
-            let aggression = agents.get_param(i, 0);
-            let is_market = market_order_threshold > 0.0
-                && qty * aggression > market_order_threshold;
-
-            if is_market {
-                market_orders.push(LobOrder {
-                    order_id: 0,
-                    agent_id: order.agent_id,
-                    side,
-                    price: order.price,
-                    quantity: qty,
-                    order_type: OrderType::Market,
-                    tick,
-                });
-            } else {
-                limit_orders.push(LobOrder {
-                    order_id: 0,
-                    agent_id: order.agent_id,
-                    side,
-                    price: round_tick(order.price, tick_size),
-                    quantity: qty,
-                    order_type: OrderType::Limit,
-                    tick,
-                });
-            }
-        }
-    }
-
-    (cancel_agents, market_orders, limit_orders)
 }

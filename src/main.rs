@@ -10,7 +10,7 @@ fn main() {
 
     
     let config = SimConfig {
-        n_agents: 4_000_000,
+        n_agents: 1_000_000,
         initial_price: 100.0,
         initial_cash: 10_000.0,
         k: 10,
@@ -154,15 +154,28 @@ fn main() {
 
     let use_gpu = config.use_gpu.unwrap_or(true);
     let engine: Box<dyn econsim::engine::SimEngine> = if use_gpu {
-        match CudaEngine::new(0, &agents, None) {
+        match CudaEngine::new(
+            0, &agents, None,
+            config.participation_threshold,
+            config.market_order_threshold,
+            config.tick_size,
+        ) {
             Ok(e) => Box::new(e),
             Err(err) => {
                 eprintln!("CUDA unavailable ({err}), falling back to CPU");
-                Box::new(CpuEngine)
+                Box::new(CpuEngine::new(
+                    config.participation_threshold,
+                    config.market_order_threshold,
+                    config.tick_size,
+                ))
             }
         }
     } else {
-        Box::new(CpuEngine)
+        Box::new(CpuEngine::new(
+            config.participation_threshold,
+            config.market_order_threshold,
+            config.tick_size,
+        ))
     };
     let mut sim = Simulation::new(config, engine, agents);
 
@@ -203,25 +216,24 @@ fn print_timing_table(t: &econsim::sim::StepTimings, total: std::time::Duration)
     };
 
     println!();
-    println!("{:<26} {:>12}  {:>7}", "phase", "total", "%");
-    println!("{}", "-".repeat(48));
+    println!("{:<34} {:>12}  {:>7}", "phase", "total", "%");
+    println!("{}", "-".repeat(56));
 
     let phases: &[(&str, std::time::Duration)] = &[
-        ("exo price update",    t.exo_price),
-        ("agent decide (total)", t.agent_decide),
-        ("  gpu upload",         t.gpu_upload),
-        ("  gpu kernel launch",  t.gpu_kernel),
-        ("  gpu download",       t.gpu_download),
-        ("order convert",       t.order_convert),
-        ("order book match",    t.lob_match),
-        ("fill application",    t.fill_apply),
+        ("exo price update",              t.exo_price),
+        ("gpu pipeline (total)",          t.agent_decide),
+        ("  gpu upload (position)",       t.gpu_upload),
+        ("  gpu kernel (decide+classify)",t.gpu_kernel),
+        ("  gpu download (classified)",   t.gpu_download),
+        ("order book match",              t.lob_match),
+        ("fill application",              t.fill_apply),
     ];
 
     for (name, dur) in phases {
-        println!("{:<26} {:>12.2?}  {:>6.2}%", name, dur, pct(*dur));
+        println!("{:<34} {:>12.2?}  {:>6.2}%", name, dur, pct(*dur));
     }
-    println!("{}", "-".repeat(48));
-    println!("{:<26} {:>12.2?}  {:>6.2}%", "wall total", total, 100.0);
+    println!("{}", "-".repeat(56));
+    println!("{:<34} {:>12.2?}  {:>6.2}%", "wall total", total, 100.0);
 }
 
 fn std_dev(data: &[f32]) -> f32 {

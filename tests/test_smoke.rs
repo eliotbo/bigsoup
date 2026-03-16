@@ -51,7 +51,7 @@ fn make_simulation(n_agents: usize, seed: u64) -> Simulation {
         tick_size: 0.0,
     };
 
-    Simulation::new(config, Box::new(CpuEngine), agents)
+    Simulation::new(config, Box::new(CpuEngine::new(0.0, 0.0, 0.0)), agents)
 }
 
 #[test]
