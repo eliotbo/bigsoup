@@ -1,10 +1,74 @@
 use std::sync::Arc;
 use std::time::Instant;
-use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PinnedHostSlice, PushKernelArg};
+use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, HostSlice, LaunchConfig, PinnedHostSlice, PushKernelArg, SyncOnDrop};
 use cudarc::nvrtc::compile_ptx;
 use crate::agent::state::AgentState;
 use crate::market::types::{BBO, Order};
 use super::{GpuStepTimings, SimEngine};
+
+/// Page-locked (pinned) host memory **without** `CU_MEMHOSTALLOC_WRITECOMBINED`.
+///
+/// `PinnedHostSlice` (cudarc's built-in) always sets the WC flag, which makes CPU
+/// reads slow (bypasses L1/L2 cache). This wrapper uses flags=0 so the memory is
+/// cache-coherent — correct for DtoH transfers where the CPU reads results immediately.
+///
+/// If this causes problems, revert to `Vec<f32>` for `h_prices`/`h_qtys` in
+/// `CudaEngine` and change the two `memcpy_dtoh` calls in `step()` back to writing
+/// into a plain `Vec`. The only loss is the CUDA staging-buffer round-trip on each
+/// download.
+struct PinnedReadableSlice<T> {
+    ptr: *mut T,
+    len: usize,
+    // Keeps the context alive until after free_host runs. Rust drops fields in
+    // declaration order, so ctx must be listed LAST to outlive ptr.
+    ctx: Arc<CudaContext>,
+}
+
+unsafe impl<T: Send> Send for PinnedReadableSlice<T> {}
+unsafe impl<T: Sync> Sync for PinnedReadableSlice<T> {}
+
+impl<T> PinnedReadableSlice<T> {
+    fn new(ctx: &Arc<CudaContext>, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        let ptr = unsafe {
+            cudarc::driver::result::malloc_host(len * std::mem::size_of::<T>(), 0)?
+        };
+        Ok(Self { ptr: ptr as *mut T, len, ctx: ctx.clone() })
+    }
+
+    fn as_slice(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl<T> Drop for PinnedReadableSlice<T> {
+    fn drop(&mut self) {
+        // ctx Arc ensures the CUDA context is still alive here.
+        // record_err swallows errors rather than panicking in a destructor.
+        self.ctx.record_err(unsafe {
+            cudarc::driver::result::free_host(self.ptr as *mut std::ffi::c_void)
+        });
+    }
+}
+
+impl<T> HostSlice<T> for PinnedReadableSlice<T> {
+    fn len(&self) -> usize {
+        self.len
+    }
+    // SyncOnDrop::Sync(None) is a no-op, same as the Vec<T> impl in cudarc.
+    // Explicit stream.synchronize() in step() covers our synchronization needs.
+    unsafe fn stream_synced_slice<'a>(
+        &'a self,
+        _stream: &'a CudaStream,
+    ) -> (&'a [T], SyncOnDrop<'a>) {
+        (std::slice::from_raw_parts(self.ptr, self.len), SyncOnDrop::Sync(None))
+    }
+    unsafe fn stream_synced_mut_slice<'a>(
+        &'a mut self,
+        _stream: &'a CudaStream,
+    ) -> (&'a mut [T], SyncOnDrop<'a>) {
+        (std::slice::from_raw_parts_mut(self.ptr, self.len), SyncOnDrop::Sync(None))
+    }
+}
 
 const KERNEL_SRC: &str = include_str!("../../kernels/decide.cu");
 const TEMPLATE_SRC: &str = include_str!("../../kernels/decide_template.cu");
@@ -29,9 +93,9 @@ pub struct CudaEngine {
     m: usize,
     block_size: u32,
     // Pre-allocated host staging buffers reused every tick
-    h_pos_f32: PinnedHostSlice<f32>,   // WC pinned: CPU writes, GPU reads (upload)
-    h_prices: Vec<f32>,
-    h_qtys: Vec<f32>,
+    h_pos_f32: PinnedHostSlice<f32>,        // WC pinned: CPU writes, GPU reads (upload)
+    h_prices: PinnedReadableSlice<f32>,     // non-WC pinned: GPU writes, CPU reads (download)
+    h_qtys: PinnedReadableSlice<f32>,       // non-WC pinned: GPU writes, CPU reads (download)
 }
 
 impl CudaEngine {
@@ -97,8 +161,8 @@ impl CudaEngine {
                 }
                 buf
             },
-            h_prices: vec![0.0f32; n],
-            h_qtys: vec![0.0f32; n],
+            h_prices: PinnedReadableSlice::new(&ctx, n)?,
+            h_qtys: PinnedReadableSlice::new(&ctx, n)?,
         })
     }
 
@@ -192,11 +256,13 @@ impl SimEngine for CudaEngine {
         // Build order buffer
         order_buffer.clear();
         order_buffer.reserve(self.n);
+        let prices = self.h_prices.as_slice();
+        let qtys = self.h_qtys.as_slice();
         for i in 0..self.n {
             order_buffer.push(Order {
                 agent_id: i as u32,
-                price: self.h_prices[i],
-                quantity: self.h_qtys[i],
+                price: prices[i],
+                quantity: qtys[i],
             });
         }
 

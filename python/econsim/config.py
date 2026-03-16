@@ -143,18 +143,18 @@ DEFAULT_ARCHETYPES = [MEAN_REVERTER, TREND_FOLLOWER, MARKET_MAKER, NOISE_TRADER]
 
 @dataclass
 class SimConfig:
-    n_agents: int = 100
+    n_agents: int = 1000
     initial_price: float = 100.0
     initial_cash: float = 10_000.0
     k: int = 10
     m: int = 4
     use_gpu: bool = True
-    seed: Optional[int] = 53
+    seed: Optional[int] = 54
     fair_value_vol: float = 0.002
     init_bias: float = 0.02
     archetypes: Optional[list] = field(default_factory=lambda: list(DEFAULT_ARCHETYPES))
     market_order_threshold: float = 0.0
-    participation_threshold: float = 0.5
+    participation_threshold: float = 0.1
     tick_size: float = 0.01
 
     def to_json(self) -> str:
