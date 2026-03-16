@@ -146,18 +146,26 @@ pub struct SimConfig {
 
     /// Minimum |quantity| * aggression for a non-MM agent to participate at all.
     /// 0.0 = everyone participates every tick (default, backward compatible).
-    /// 
-    /// threshold       active    total  pct                                                                       
+    ///
+    /// threshold       active    total  pct
     /// 0.0000           9803     9803  100.0%
-    /// 0.0010           9308     9803   95.0%                                                                        
-    /// 0.0050           7283     9803   74.3%                          
+    /// 0.0010           9308     9803   95.0%
+    /// 0.0050           7283     9803   74.3%
     /// 0.0100           5258     9803   53.6%
     /// 0.0200           2721     9803   27.8%
     /// 0.0500            579     9803    5.9%
     /// 0.1000            122     9803    1.2%
     #[serde(default)]
     pub participation_threshold: f32,
+
+    /// Minimum price increment for limit orders. All bid/ask prices are rounded
+    /// to the nearest multiple of this value before entering the LOB.
+    /// 0.0 = disabled (arbitrary f32, backward compatible). Default: 0.01.
+    #[serde(default = "default_tick_size")]
+    pub tick_size: f32,
 }
+
+fn default_tick_size() -> f32 { 0.01 }
 
 impl Default for SimConfig {
     fn default() -> Self {
@@ -174,6 +182,7 @@ impl Default for SimConfig {
             archetypes: None,
             market_order_threshold: 0.0,
             participation_threshold: 0.0,
+            tick_size: 0.01,
         }
     }
 }
@@ -195,6 +204,7 @@ pub struct Simulation {
     fair_value_vol: f32,
     market_order_threshold: f32,
     participation_threshold: f32,
+    tick_size: f32,
     rng: rand::rngs::StdRng,
     order_buffer: Vec<crate::market::types::Order>,
     trade_buffer: Vec<crate::market::types::Trade>,
@@ -207,6 +217,7 @@ impl Simulation {
         let fair_value_vol = config.fair_value_vol;
         let market_order_threshold = config.market_order_threshold;
         let participation_threshold = config.participation_threshold;
+        let tick_size = config.tick_size;
         let rng = rand::rngs::StdRng::seed_from_u64(config.seed.unwrap_or(42));
         Self {
             agents,
@@ -224,6 +235,7 @@ impl Simulation {
             fair_value_vol,
             market_order_threshold,
             participation_threshold,
+            tick_size,
             rng,
             order_buffer: Vec::with_capacity(n),
             trade_buffer: Vec::new(),
@@ -260,6 +272,7 @@ impl Simulation {
             self.tick,
             self.market_order_threshold,
             self.participation_threshold,
+            self.tick_size,
         );
         self.timings.order_convert += t2.elapsed();
 
@@ -311,6 +324,17 @@ impl Simulation {
     }
 }
 
+/// Round `price` to the nearest multiple of `tick_size`.
+/// When tick_size is 0.0 the price is returned unchanged.
+#[inline]
+fn round_tick(price: f32, tick_size: f32) -> f32 {
+    if tick_size == 0.0 {
+        price
+    } else {
+        (price / tick_size).round() * tick_size
+    }
+}
+
 /// Convert kernel output orders into LOB orders, handling market maker
 /// two-sided quoting and market order promotion.
 fn convert_orders(
@@ -319,6 +343,7 @@ fn convert_orders(
     tick: u64,
     market_order_threshold: f32,
     participation_threshold: f32,
+    tick_size: f32,
 ) -> (Vec<u32>, Vec<LobOrder>, Vec<LobOrder>) {
     let mut cancel_agents = Vec::new();
     let mut market_orders = Vec::new();
@@ -355,7 +380,7 @@ fn convert_orders(
                     order_id: 0,
                     agent_id: order.agent_id,
                     side: Side::Buy,
-                    price: signal_price - half_spread,
+                    price: round_tick(signal_price - half_spread, tick_size),
                     quantity: quote_size,
                     order_type: OrderType::Limit,
                     tick: u64::MAX, // MM quotes persist until explicitly cancelled
@@ -364,7 +389,7 @@ fn convert_orders(
                     order_id: 0,
                     agent_id: order.agent_id,
                     side: Side::Sell,
-                    price: signal_price + half_spread,
+                    price: round_tick(signal_price + half_spread, tick_size),
                     quantity: quote_size,
                     order_type: OrderType::Limit,
                     tick: u64::MAX, // MM quotes persist until explicitly cancelled
@@ -400,7 +425,7 @@ fn convert_orders(
                     order_id: 0,
                     agent_id: order.agent_id,
                     side,
-                    price: order.price,
+                    price: round_tick(order.price, tick_size),
                     quantity: qty,
                     order_type: OrderType::Limit,
                     tick,

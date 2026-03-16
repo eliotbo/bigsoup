@@ -7,7 +7,7 @@ use rand::SeedableRng;
 
 fn main() {
     let config = SimConfig {
-        n_agents: 1_000_000,
+        n_agents: 100_000,
         initial_price: 100.0,
         initial_cash: 10_000.0,
         k: 10,
@@ -19,6 +19,7 @@ fn main() {
         archetypes: None,      // main.rs manages archetypes directly below
         market_order_threshold: 0.0,
         participation_threshold: 0.1, // 0.1 -> 1% partcipation rate for market takers
+        tick_size: 0.01,
     };
 
     let n_agents = config.n_agents;
