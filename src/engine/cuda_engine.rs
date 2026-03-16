@@ -28,6 +28,10 @@ pub struct CudaEngine {
     k: usize,
     m: usize,
     block_size: u32,
+    // Pre-allocated host staging buffers reused every tick
+    h_pos_f32: Vec<f32>,
+    h_prices: Vec<f32>,
+    h_qtys: Vec<f32>,
 }
 
 impl CudaEngine {
@@ -85,6 +89,9 @@ impl CudaEngine {
             k,
             m,
             block_size: 256,
+            h_pos_f32: vec![0.0f32; n],
+            h_prices: vec![0.0f32; n],
+            h_qtys: vec![0.0f32; n],
         })
     }
 
@@ -115,8 +122,10 @@ impl SimEngine for CudaEngine {
     ) -> (usize, GpuStepTimings) {
         // --- Phase 5: GPU upload ---
         let t0 = Instant::now();
-        let pos_f32: Vec<f32> = agents.position.iter().map(|&x| x as f32).collect();
-        self.stream.memcpy_htod(&pos_f32, &mut self.d_position).unwrap();
+        for (dst, &src) in self.h_pos_f32.iter_mut().zip(agents.position.iter()) {
+            *dst = src as f32;
+        }
+        self.stream.memcpy_htod(&self.h_pos_f32, &mut self.d_position).unwrap();
         let upload_time = t0.elapsed();
 
         // Compute grid dimensions
@@ -161,15 +170,12 @@ impl SimEngine for CudaEngine {
 
         // --- Phase 7: GPU download ---
         let t2 = Instant::now();
-        let prices = self.stream.memcpy_dtov(&self.d_order_price).unwrap();
-        let qtys = self.stream.memcpy_dtov(&self.d_order_quantity).unwrap();
-        let internal_state = self.stream.memcpy_dtov(&self.d_internal_state).unwrap();
+        self.stream.memcpy_dtoh(&self.d_order_price, &mut self.h_prices).unwrap();
+        self.stream.memcpy_dtoh(&self.d_order_quantity, &mut self.h_qtys).unwrap();
 
         // Block until all async GPU work is complete before using the results
         self.stream.synchronize().unwrap();
         let download_time = t2.elapsed();
-
-        agents.internal_state.copy_from_slice(&internal_state);
 
         // Build order buffer
         order_buffer.clear();
@@ -177,8 +183,8 @@ impl SimEngine for CudaEngine {
         for i in 0..self.n {
             order_buffer.push(Order {
                 agent_id: i as u32,
-                price: prices[i],
-                quantity: qtys[i],
+                price: self.h_prices[i],
+                quantity: self.h_qtys[i],
             });
         }
 
