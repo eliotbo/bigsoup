@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "chart"
 path = "src/bin/chart.rs"
 
+[[bin]]
+name = "depth_screenshot"
+path = "src/bin/depth_screenshot.rs"
+
 [lib]
 name = "econsim"
 crate-type = ["cdylib", "rlib"]

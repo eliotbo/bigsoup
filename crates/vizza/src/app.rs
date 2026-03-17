@@ -8,7 +8,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{Config, MarketData, event::MouseState, live::LiveDataSource, renderer::Renderer};
+use crate::{Config, MarketData, event::MouseState, live::LiveDataSource, renderer::Renderer, depth_window::DepthWindow, depth_snapshot::DepthSnapshot};
 
 pub struct ChartApp {
     config: Config,
@@ -25,6 +25,10 @@ pub struct ChartApp {
     live_tick_interval: Option<Duration>,
     next_live_tick: Option<Instant>,
     needs_redraw: bool,
+    // Depth order book window
+    depth_window: Option<DepthWindow>,
+    depth_enabled: bool,
+    pending_depth_snapshot: Option<DepthSnapshot>,
 }
 
 impl ChartApp {
@@ -68,6 +72,9 @@ impl ChartApp {
             ),
             next_live_tick: None,
             needs_redraw: false,
+            depth_window: None,
+            depth_enabled: false,
+            pending_depth_snapshot: None,
         }
     }
 
@@ -98,6 +105,9 @@ impl ChartApp {
             ),
             next_live_tick: None,
             needs_redraw: false,
+            depth_window: None,
+            depth_enabled: false,
+            pending_depth_snapshot: None,
         }
     }
 
@@ -128,6 +138,25 @@ impl ChartApp {
             ),
             next_live_tick: None,
             needs_redraw: false,
+            depth_window: None,
+            depth_enabled: false,
+            pending_depth_snapshot: None,
+        }
+    }
+
+    /// Enable the depth order book window. Must be called before running the event loop.
+    pub fn enable_depth_window(&mut self) {
+        self.depth_enabled = true;
+    }
+
+    /// Submit a new depth snapshot to be rendered in the depth window.
+    pub fn submit_depth_snapshot(&mut self, snapshot: DepthSnapshot) {
+        if let Some(dw) = &mut self.depth_window {
+            dw.update_snapshot(&snapshot);
+            dw.request_redraw();
+        } else {
+            // Store for when the window is created
+            self.pending_depth_snapshot = Some(snapshot);
         }
     }
 
@@ -191,6 +220,22 @@ impl ApplicationHandler for ChartApp {
                                 self.next_live_tick = Some(Instant::now());
                             }
                             self.mark_dirty();
+
+                            // Create depth window if enabled
+                            if self.depth_enabled && self.depth_window.is_none() {
+                                let palette = crate::config::ColorPalette::from_theme(self.config.theme);
+                                match DepthWindow::new(event_loop, palette) {
+                                    Ok(mut dw) => {
+                                        if let Some(snap) = self.pending_depth_snapshot.take() {
+                                            dw.update_snapshot(&snap);
+                                        }
+                                        self.depth_window = Some(dw);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to create depth window: {}", e);
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("Failed to create renderer: {}", e);
@@ -209,9 +254,31 @@ impl ApplicationHandler for ChartApp {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Check if the event belongs to the depth window
+        if let Some(dw) = &mut self.depth_window {
+            if window_id == dw.window_id() {
+                match event {
+                    WindowEvent::RedrawRequested => {
+                        if let Err(e) = dw.render() {
+                            eprintln!("Depth render error: {}", e);
+                        }
+                    }
+                    WindowEvent::Resized(new_size) => {
+                        dw.resize(new_size);
+                        dw.request_redraw();
+                    }
+                    WindowEvent::CloseRequested => {
+                        self.depth_window = None;
+                    }
+                    _ => {}
+                }
+                return;
+            }
+        }
+
         match event {
             WindowEvent::RedrawRequested => {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -262,6 +329,9 @@ impl ApplicationHandler for ChartApp {
         if self.needs_redraw {
             if let Some(window) = &self.window {
                 window.request_redraw();
+            }
+            if let Some(dw) = &self.depth_window {
+                dw.request_redraw();
             }
             event_loop.set_control_flow(ControlFlow::Wait);
         } else if let Some(deadline) = next_deadline {

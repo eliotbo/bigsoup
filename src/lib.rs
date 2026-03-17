@@ -95,7 +95,7 @@ impl PySimulation {
     }
 }
 
-fn default_param_distributions() -> Vec<(f32, f32)> {
+fn _default_param_distributions() -> Vec<(f32, f32)> {
     // noise_scale must be large enough that signal * aggression exceeds the initial spread
     vec![
         (0.1, 0.5),    // aggression

@@ -415,6 +415,14 @@ impl LimitOrderBook {
             .map(|(&p, l)| (p.into_inner(), l.total_quantity))
             .collect()
     }
+
+    /// Take a snapshot of the full order book for depth visualisation.
+    pub fn depth_snapshot(&self, max_levels: usize) -> vizza::DepthSnapshot {
+        vizza::DepthSnapshot {
+            bids: self.book_bids(max_levels),
+            asks: self.book_asks(max_levels),
+        }
+    }
 }
 
 #[cfg(test)]

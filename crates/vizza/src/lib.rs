@@ -3,6 +3,9 @@
 
 pub mod app;
 pub mod config;
+pub mod depth_renderer;
+pub mod depth_snapshot;
+pub mod depth_window;
 pub mod event;
 pub mod live;
 pub mod live_view;
@@ -28,6 +31,11 @@ pub use time_spacing::{TimeTickSpacing, TimeUnit, candidate_steps, select_time_s
 // Re-export public API for creating plots
 pub use app::{run_with_config, run_with_config_and_source, run_with_config_and_sources};
 pub use plot_builder::{PlotBuilder, plot, plot_with_config};
+
+// Re-export depth types
+pub use depth_renderer::DepthRenderer;
+pub use depth_snapshot::DepthSnapshot;
+pub use depth_window::DepthWindow;
 
 // Re-export live data sources
 pub use live::{
