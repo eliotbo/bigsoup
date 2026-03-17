@@ -36,14 +36,14 @@ extern "C" __global__ void classify_orders(
     out_qty[i]         = 0.0f;
     out_cancel_flag[i] = 0;
 
-    // Skip near-zero quantities (matches f32::EPSILON)
-    if (abs_qty < 1.1920929e-7f) return;
-
     int   is_mm      = agent_type[i];
     float aggression = strategy_params[i * K + 0];
 
     if (!is_mm) {
         // ---- Non-MM agent ----
+
+        // Skip near-zero quantities (matches f32::EPSILON)
+        if (abs_qty < 1.1920929e-7f) return;
 
         // Participation filter
         if (participation_threshold > 0.0f &&

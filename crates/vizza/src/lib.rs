@@ -5,6 +5,8 @@ pub mod app;
 pub mod config;
 pub mod depth_renderer;
 pub mod depth_snapshot;
+pub mod depth_timeline;
+pub mod depth_timeline_renderer;
 pub mod depth_window;
 pub mod event;
 pub mod live;
@@ -35,6 +37,8 @@ pub use plot_builder::{PlotBuilder, plot, plot_with_config};
 // Re-export depth types
 pub use depth_renderer::DepthRenderer;
 pub use depth_snapshot::DepthSnapshot;
+pub use depth_timeline::{DepthTimeline, DepthTimelineEntry, DepthTimelineState};
+pub use depth_timeline_renderer::DepthTimelineRenderer;
 pub use depth_window::DepthWindow;
 
 // Re-export live data sources
