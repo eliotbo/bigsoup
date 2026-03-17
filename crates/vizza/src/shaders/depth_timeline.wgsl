@@ -2,6 +2,7 @@
 //
 // Each instance is one (column, price_level) pair with nonzero depth.
 // The vertex shader generates a quad (6 vertices, 2 triangles) per instance.
+// Fragments outside the chart viewport are discarded.
 
 struct Uniform {
     price_min: f32,
@@ -12,10 +13,10 @@ struct Uniform {
     window_w: f32,
     window_h: f32,
     column_width_px: f32,
-    margin_left: f32,    // left margin for Y-axis labels
-    margin_bottom: f32,  // bottom margin for X-axis labels
-    _pad0: f32,
-    _pad1: f32,
+    margin_left: f32,    // left margin
+    margin_bottom: f32,  // bottom margin
+    margin_top: f32,     // top margin
+    margin_right: f32,   // right margin
 }
 
 @group(0) @binding(0)
@@ -33,6 +34,7 @@ struct Instance {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec3<f32>,
+    @location(1) pixel_pos: vec2<f32>,
 }
 
 @vertex
@@ -45,20 +47,22 @@ fn vs_main(
 
     if u.max_log_qty <= 0.0 || u.col_count <= 0.0 {
         out.clip_position = vec4<f32>(0.0, 0.0, -2.0, 1.0);
+        out.pixel_pos = vec2<f32>(0.0, 0.0);
         return out;
     }
 
     let price_range = u.price_max - u.price_min;
     if price_range <= 0.0 {
         out.clip_position = vec4<f32>(0.0, 0.0, -2.0, 1.0);
+        out.pixel_pos = vec2<f32>(0.0, 0.0);
         return out;
     }
 
     // Chart area (excluding margins)
     let chart_left = u.margin_left;
-    let chart_bottom = u.window_h - u.margin_bottom;
-    let chart_width = u.window_w - u.margin_left;
-    let chart_height = u.window_h - u.margin_bottom;
+    let chart_top = u.margin_top;
+    let chart_width = u.window_w - u.margin_left - u.margin_right;
+    let chart_height = u.window_h - u.margin_top - u.margin_bottom;
 
     // X: column position within chart area (with gap between columns)
     let col_gap = 3.0;
@@ -77,11 +81,11 @@ fn vs_main(
     // Subtract 2px gap between adjacent price level bars.
     let px_per_dollar = chart_height / price_range;
     let bar_gap = 2.0;
-    let raw_bar_height = px_per_dollar * 0.01;
+    let raw_bar_height = px_per_dollar * 0.01 * 0.5;
     let bar_height_px = max(raw_bar_height - bar_gap, 1.0);
 
     // Y center in pixel coords (0 = top of window)
-    let y_center_px = chart_height * (1.0 - price_t);
+    let y_center_px = chart_top + chart_height * (1.0 - price_t);
 
     let y_top = y_center_px - bar_height_px * 0.5;
     let y_bot = y_center_px + bar_height_px * 0.5;
@@ -101,6 +105,8 @@ fn vs_main(
         default: { px = 0.0; py = 0.0; }
     }
 
+    out.pixel_pos = vec2<f32>(px, py);
+
     // Pixel coords -> clip space
     let x_clip = (px / u.window_w) * 2.0 - 1.0;
     let y_clip = 1.0 - (py / u.window_h) * 2.0;
@@ -111,5 +117,16 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 0.25);
+    // Discard fragments outside the chart viewport
+    let chart_left = u.margin_left;
+    let chart_top = u.margin_top;
+    let chart_right = u.window_w - u.margin_right;
+    let chart_bottom = u.window_h - u.margin_bottom;
+
+    if in.pixel_pos.x < chart_left || in.pixel_pos.x > chart_right ||
+       in.pixel_pos.y < chart_top  || in.pixel_pos.y > chart_bottom {
+        discard;
+    }
+
+    return vec4<f32>(in.color, 0.10);
 }

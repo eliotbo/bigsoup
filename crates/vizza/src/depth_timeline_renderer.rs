@@ -10,7 +10,7 @@ use wgpu::util::DeviceExt;
 use crate::config::ColorPalette;
 use crate::depth_timeline::{
     DepthTimelineInstance, DepthTimelineState, DepthTimelineUniform,
-    MAX_INSTANCES, MARGIN_LEFT, MARGIN_BOTTOM, prepare_instances,
+    MAX_INSTANCES, HEADLESS_MARGINS, prepare_instances,
 };
 use crate::price_spacing::select_price_spacing;
 
@@ -160,10 +160,10 @@ impl DepthTimelineRenderer {
             window_w: width as f32,
             window_h: height as f32,
             column_width_px: 8.0,
-            margin_left: MARGIN_LEFT,
-            margin_bottom: MARGIN_BOTTOM,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            margin_left: HEADLESS_MARGINS.left,
+            margin_bottom: HEADLESS_MARGINS.bottom,
+            margin_top: HEADLESS_MARGINS.top,
+            margin_right: HEADLESS_MARGINS.right,
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -176,7 +176,7 @@ impl DepthTimelineRenderer {
             label: Some("DepthTimeline Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -275,7 +275,7 @@ impl DepthTimelineRenderer {
         &self,
         state: &DepthTimelineState,
     ) -> (Vec<DepthTimelineInstance>, DepthTimelineUniform) {
-        prepare_instances(state, &self.palette, self.width as f32, self.height as f32)
+        prepare_instances(state, &self.palette, self.width as f32, self.height as f32, HEADLESS_MARGINS)
     }
 
     /// Render the state to RGBA pixels.
@@ -435,8 +435,8 @@ impl DepthTimelineRenderer {
         let g = (bg[1].powf(1.0 / 2.2) * 255.0) as u8;
         let b = (bg[2].powf(1.0 / 2.2) * 255.0) as u8;
 
-        let margin_left = MARGIN_LEFT as u32;
-        let margin_bottom = MARGIN_BOTTOM as u32;
+        let margin_left = HEADLESS_MARGINS.left as u32;
+        let margin_bottom = HEADLESS_MARGINS.bottom as u32;
         let chart_bottom = self.height.saturating_sub(margin_bottom);
 
         // Left margin (full height)
@@ -470,7 +470,7 @@ impl DepthTimelineRenderer {
         let text_color = [200u8, 200, 200, 255];
         let grid_color = [255u8, 255, 255, 30]; // subtle white
 
-        let chart_height = self.height as f32 - MARGIN_BOTTOM;
+        let chart_height = self.height as f32 - HEADLESS_MARGINS.bottom;
         let price_range = state.price_max - state.price_min;
 
         if price_range <= 0.0 || chart_height <= 0.0 {
@@ -495,7 +495,7 @@ impl DepthTimelineRenderer {
                 self.width,
                 self.height,
                 y_px,
-                MARGIN_LEFT as u32,
+                HEADLESS_MARGINS.left as u32,
                 self.width,
                 grid_color,
             );
@@ -503,8 +503,8 @@ impl DepthTimelineRenderer {
             // Price label
             let label = format!("${}", spacing.format_price(price));
             let tw = text_width(&label);
-            let label_x = if MARGIN_LEFT as u32 > tw + 4 {
-                MARGIN_LEFT as u32 - tw - 4
+            let label_x = if HEADLESS_MARGINS.left as u32 > tw + 4 {
+                HEADLESS_MARGINS.left as u32 - tw - 4
             } else {
                 1
             };
@@ -520,7 +520,7 @@ impl DepthTimelineRenderer {
 
         // ── X-axis: time/tick labels and vertical grid lines ────────────
         let snapshots = state.visible_snapshots();
-        let col_start = state.visible_left();
+        let col_start = state.scroll_left().floor() as usize;
         let num_cols = snapshots.len();
 
         if num_cols == 0 {
@@ -542,7 +542,7 @@ impl DepthTimelineRenderer {
             ((cols_per_label_raw + 9) / 10) * 10
         };
 
-        let y_label = self.height - MARGIN_BOTTOM as u32 + 4;
+        let y_label = self.height - HEADLESS_MARGINS.bottom as u32 + 4;
 
         for (i, snap) in snapshots.iter().enumerate() {
             if cols_per_label > 1 {
@@ -552,7 +552,7 @@ impl DepthTimelineRenderer {
                 }
             }
 
-            let x_px = MARGIN_LEFT as u32 + (i as f32 * state.column_width_px) as u32;
+            let x_px = HEADLESS_MARGINS.left as u32 + (i as f32 * state.column_width_px) as u32;
             if x_px >= self.width {
                 break;
             }
@@ -564,7 +564,7 @@ impl DepthTimelineRenderer {
                 self.height,
                 x_px,
                 0,
-                self.height - MARGIN_BOTTOM as u32,
+                self.height - HEADLESS_MARGINS.bottom as u32,
                 grid_color,
             );
 

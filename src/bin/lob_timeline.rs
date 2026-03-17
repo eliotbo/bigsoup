@@ -70,6 +70,7 @@ struct App {
     tick_range: (u64, u64),
     window: Option<DepthTimelineWindow>,
     cursor_x: f64,
+    cursor_y: f64,
 }
 
 impl ApplicationHandler for App {
@@ -106,8 +107,8 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 win.resize(size);
-                // Recompute visible_count for new width
-                let chart_w = size.width as f32 - 70.0;
+                // Recompute visible_count for new width (viewport is inset 50px each side)
+                let chart_w = (size.width as f32 - 100.0).max(1.0);
                 self.state.visible_count =
                     (chart_w / self.state.column_width_px).ceil() as usize;
                 if self.state.auto_y_scale {
@@ -121,11 +122,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state: press, button, .. } => {
-                win.on_mouse_input(button, press, self.cursor_x);
+                win.on_mouse_input(button, press, self.cursor_x, self.cursor_y);
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_x = position.x;
-                win.on_cursor_moved(position.x, &mut self.state);
+                self.cursor_y = position.y;
+                win.on_cursor_moved(position.x, position.y, &mut self.state);
                 win.update(&self.state);
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -137,7 +139,7 @@ impl ApplicationHandler for App {
                 win.update(&self.state);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed {
+                if event.state == ElementState::Pressed && !event.repeat {
                     if let PhysicalKey::Code(code) = event.physical_key {
                         win.on_key(code, &mut self.state);
                         win.update(&self.state);
@@ -299,6 +301,7 @@ fn main() -> anyhow::Result<()> {
         tick_range,
         window: None,
         cursor_x: 0.0,
+        cursor_y: 0.0,
     };
     event_loop.run_app(&mut app)?;
 
