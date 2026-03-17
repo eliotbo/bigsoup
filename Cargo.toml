@@ -33,6 +33,7 @@ vizza = { path = "crates/vizza" }
 lod = { path = "crates/lod" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
+winit = "0.30"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -17,10 +17,11 @@ extern "C" __global__ void classify_orders(
     float* out_qty,
     int*   out_cancel_flag,          // 1 = cancel resting orders for this agent
     float  participation_threshold,
-    float  market_order_threshold,
+    float  market_order_prob,        // probability [0,1] a non-MM submits a market order; 0 = always limit
     float  tick_size,
     int    N,
-    int    K
+    int    K,
+    unsigned int tick
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N) return;
@@ -50,9 +51,13 @@ extern "C" __global__ void classify_orders(
             abs_qty * aggression < participation_threshold)
             return;
 
-        int is_buy    = qty > 0.0f;
-        int is_market = market_order_threshold > 0.0f &&
-                        abs_qty * aggression > market_order_threshold;
+        int is_buy = qty > 0.0f;
+
+        // Hash agent index and tick to get a stable per-agent-per-tick random float in [0,1).
+        unsigned int h = (unsigned int)i ^ (tick * 2654435761u);
+        h ^= h >> 16; h *= 0x45d9f3bu; h ^= h >> 16;
+        float r = (float)(h >> 16) / 65536.0f;
+        int is_market = market_order_prob > 0.0f && r < market_order_prob;
 
         if (is_market) {
             out_order_type[i] = is_buy ? 3 : 4;

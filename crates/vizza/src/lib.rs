@@ -7,6 +7,7 @@ pub mod depth_renderer;
 pub mod depth_snapshot;
 pub mod depth_timeline;
 pub mod depth_timeline_renderer;
+pub mod depth_timeline_window;
 pub mod depth_window;
 pub mod event;
 pub mod live;
@@ -39,6 +40,7 @@ pub use depth_renderer::DepthRenderer;
 pub use depth_snapshot::DepthSnapshot;
 pub use depth_timeline::{DepthTimeline, DepthTimelineEntry, DepthTimelineState};
 pub use depth_timeline_renderer::DepthTimelineRenderer;
+pub use depth_timeline_window::DepthTimelineWindow;
 pub use depth_window::DepthWindow;
 
 // Re-export live data sources

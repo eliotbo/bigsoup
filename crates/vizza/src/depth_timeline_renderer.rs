@@ -8,42 +8,11 @@ use anyhow::Result;
 use wgpu::util::DeviceExt;
 
 use crate::config::ColorPalette;
-use crate::depth_timeline::DepthTimelineState;
+use crate::depth_timeline::{
+    DepthTimelineInstance, DepthTimelineState, DepthTimelineUniform,
+    MAX_INSTANCES, MARGIN_LEFT, MARGIN_BOTTOM, prepare_instances,
+};
 use crate::price_spacing::select_price_spacing;
-
-// ── Per-instance GPU data ───────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct DepthTimelineInstance {
-    column_index: f32,
-    price: f32,
-    log_quantity: f32,
-    color_r: f32,
-    color_g: f32,
-    color_b: f32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct DepthTimelineUniform {
-    price_min: f32,
-    price_max: f32,
-    col_start: f32,
-    col_count: f32,
-    max_log_qty: f32,
-    window_w: f32,
-    window_h: f32,
-    column_width_px: f32,
-    margin_left: f32,
-    margin_bottom: f32,
-    _pad0: f32,
-    _pad1: f32,
-}
-
-const MAX_INSTANCES: usize = 100_000;
-const MARGIN_LEFT: f32 = 70.0;
-const MARGIN_BOTTOM: f32 = 24.0;
 
 // ── Tiny 4×6 bitmap font ───────────────────────────────────────────────
 
@@ -306,72 +275,7 @@ impl DepthTimelineRenderer {
         &self,
         state: &DepthTimelineState,
     ) -> (Vec<DepthTimelineInstance>, DepthTimelineUniform) {
-        let snapshots = state.visible_snapshots();
-        let bid_color = self.palette.candle_up_market;
-        let ask_color = self.palette.candle_down_market;
-        let col_start = state.visible_left() as f32;
-        let col_count = snapshots.len() as f32;
-
-        let mut instances = Vec::new();
-        let mut max_log_qty: f32 = 0.0;
-
-        for (i, snap) in snapshots.iter().enumerate() {
-            let col_idx = col_start + i as f32;
-            for &(price, qty) in &snap.bids {
-                if price < state.price_min || price > state.price_max {
-                    continue;
-                }
-                let log_qty = (1.0 + qty).log10();
-                max_log_qty = max_log_qty.max(log_qty);
-                instances.push(DepthTimelineInstance {
-                    column_index: col_idx,
-                    price,
-                    log_quantity: log_qty,
-                    color_r: bid_color[0],
-                    color_g: bid_color[1],
-                    color_b: bid_color[2],
-                });
-            }
-            for &(price, qty) in &snap.asks {
-                if price < state.price_min || price > state.price_max {
-                    continue;
-                }
-                let log_qty = (1.0 + qty).log10();
-                max_log_qty = max_log_qty.max(log_qty);
-                instances.push(DepthTimelineInstance {
-                    column_index: col_idx,
-                    price,
-                    log_quantity: log_qty,
-                    color_r: ask_color[0],
-                    color_g: ask_color[1],
-                    color_b: ask_color[2],
-                });
-            }
-        }
-
-        if max_log_qty <= 0.0 {
-            max_log_qty = 1.0;
-        }
-
-        // Truncate to MAX_INSTANCES
-        instances.truncate(MAX_INSTANCES);
-
-        let uniform = DepthTimelineUniform {
-            price_min: state.price_min,
-            price_max: state.price_max,
-            col_start,
-            col_count,
-            max_log_qty,
-            window_w: self.width as f32,
-            window_h: self.height as f32,
-            column_width_px: state.column_width_px,
-            margin_left: MARGIN_LEFT,
-            margin_bottom: MARGIN_BOTTOM,
-            _pad0: 0.0,
-            _pad1: 0.0,
-        };
-
-        (instances, uniform)
+        prepare_instances(state, &self.palette, self.width as f32, self.height as f32)
     }
 
     /// Render the state to RGBA pixels.

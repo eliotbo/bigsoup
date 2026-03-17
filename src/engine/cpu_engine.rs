@@ -156,8 +156,11 @@ impl SimEngine for CpuEngine {
                 let side = if order_qty > 0.0 { Side::Buy } else { Side::Sell };
                 let qty = order_qty.abs();
 
+                let mut h = (i as u32) ^ (tick as u32).wrapping_mul(2654435761);
+                h ^= h >> 16; h = h.wrapping_mul(0x45d9f3b); h ^= h >> 16;
+                let r = (h >> 16) as f32 / 65536.0;
                 let is_market = self.market_order_threshold > 0.0
-                    && qty * aggression > self.market_order_threshold;
+                    && r < self.market_order_threshold;
 
                 if is_market {
                     market_orders.push(LobOrder {

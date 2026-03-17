@@ -359,8 +359,9 @@ impl SimEngine for CudaEngine {
 
         // --- GPU kernel: classify_orders (same stream, no synchronize between) ---
         let participation_threshold = self.participation_threshold;
-        let market_order_threshold = self.market_order_threshold;
+        let market_order_prob = self.market_order_threshold;
         let tick_size_val = self.tick_size;
+        let tick_u32 = tick as u32;
         unsafe {
             self.stream
                 .launch_builder(&self.classify_func)
@@ -378,10 +379,11 @@ impl SimEngine for CudaEngine {
                 .arg(&mut self.d_out_qty)
                 .arg(&mut self.d_out_cancel_flag)
                 .arg(&participation_threshold)
-                .arg(&market_order_threshold)
+                .arg(&market_order_prob)
                 .arg(&tick_size_val)
                 .arg(&n_i32)
                 .arg(&k_i32)
+                .arg(&tick_u32)
                 .launch(cfg)
         }
         .unwrap();

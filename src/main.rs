@@ -20,7 +20,7 @@ fn main() {
         fair_value_vol: 0.002, // 0.2% per-tick random walk on fundamental
         init_bias: 0.02,       // ±2% initial fair-value disagreement between agents
         archetypes: None,      // main.rs manages archetypes directly below
-        market_order_threshold: 0.0,
+        market_order_threshold: 0.8,
         participation_threshold: 0.1, // 0.1 -> 1% partcipation rate for market takers
         tick_size: 0.01,
     };

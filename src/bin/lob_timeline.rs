@@ -7,6 +7,11 @@ use econsim::sim::{SimConfig, build_simulation};
 use vizza::config::{ColorPalette, Theme};
 use vizza::depth_timeline::{DepthTimeline, DepthTimelineEntry, DepthTimelineState};
 use vizza::depth_timeline_renderer::DepthTimelineRenderer;
+use vizza::depth_timeline_window::DepthTimelineWindow;
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::PhysicalKey;
 
 #[derive(Parser)]
 struct Args {
@@ -38,7 +43,7 @@ struct Args {
     #[clap(long, default_value = "50")]
     levels: usize,
 
-    /// Output PNG path
+    /// Output PNG path (also saves PNG before opening window)
     #[clap(long, default_value = "screenshots/lob_timeline.png")]
     output: String,
 
@@ -53,6 +58,101 @@ struct Args {
     /// Full SimConfig as JSON (overrides --agents, --vol, --seed, --cpu)
     #[clap(long)]
     config: Option<String>,
+
+    /// Skip the interactive window (just save PNG)
+    #[clap(long)]
+    no_window: bool,
+}
+
+struct App {
+    state: DepthTimelineState,
+    palette: ColorPalette,
+    tick_range: (u64, u64),
+    window: Option<DepthTimelineWindow>,
+    cursor_x: f64,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        match DepthTimelineWindow::new(event_loop, self.palette.clone(), self.tick_range) {
+            Ok(mut win) => {
+                win.update(&self.state);
+                self.window = Some(win);
+            }
+            Err(e) => {
+                eprintln!("Failed to create timeline window: {e}");
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
+        let Some(win) = &mut self.window else { return };
+        if win.window_id() != window_id {
+            return;
+        }
+
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::Resized(size) => {
+                win.resize(size);
+                // Recompute visible_count for new width
+                let chart_w = size.width as f32 - 70.0;
+                self.state.visible_count =
+                    (chart_w / self.state.column_width_px).ceil() as usize;
+                if self.state.auto_y_scale {
+                    self.state.auto_scale_y();
+                }
+                win.update(&self.state);
+            }
+            WindowEvent::RedrawRequested => {
+                if let Err(e) = win.render() {
+                    eprintln!("Render error: {e}");
+                }
+            }
+            WindowEvent::MouseInput { state: press, button, .. } => {
+                win.on_mouse_input(button, press, self.cursor_x);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_x = position.x;
+                win.on_cursor_moved(position.x, &mut self.state);
+                win.update(&self.state);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 30.0,
+                };
+                win.on_mouse_wheel(dy, &mut self.state);
+                win.update(&self.state);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed {
+                    if let PhysicalKey::Code(code) = event.physical_key {
+                        win.on_key(code, &mut self.state);
+                        win.update(&self.state);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(win) = &self.window {
+            win.request_redraw();
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -67,6 +167,7 @@ fn main() -> anyhow::Result<()> {
             seed: Some(args.seed),
             fair_value_vol: args.vol,
             init_bias: 0.02,
+            market_order_threshold: 1.0,
             archetypes: Some(vec![
                 Archetype {
                     name: "mean_reverter".to_string(), weight: 0.3,
@@ -161,6 +262,7 @@ fn main() -> anyhow::Result<()> {
         sim.price_history.last().unwrap_or(&0.0)
     );
 
+    let tick_range = (1u64, args.ticks);
     let timeline = DepthTimeline { snapshots };
     let num_snapshots = timeline.snapshots.len();
 
@@ -178,14 +280,27 @@ fn main() -> anyhow::Result<()> {
         state.price_min, state.price_max, num_snapshots, column_width_px
     );
 
-    let renderer = DepthTimelineRenderer::new(args.width, args.height, palette)?;
-
-    // Ensure output directory exists
+    // Save PNG
     if let Some(parent) = std::path::Path::new(&args.output).parent() {
         std::fs::create_dir_all(parent).ok();
     }
-
+    let renderer = DepthTimelineRenderer::new(args.width, args.height, palette.clone())?;
     renderer.render_to_png(&state, &args.output)?;
+
+    // Open interactive window unless --no-window
+    if args.no_window {
+        return Ok(());
+    }
+
+    let event_loop = EventLoop::new()?;
+    let mut app = App {
+        state,
+        palette,
+        tick_range,
+        window: None,
+        cursor_x: 0.0,
+    };
+    event_loop.run_app(&mut app)?;
 
     Ok(())
 }

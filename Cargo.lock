@@ -600,6 +600,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "vizza",
+ "winit",
 ]
 
 [[package]]
