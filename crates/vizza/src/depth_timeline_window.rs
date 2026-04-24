@@ -104,6 +104,10 @@ pub struct DepthTimelineWindow {
     grid_vertex_buffer: wgpu::Buffer,
     grid_vertex_count: u32,
 
+    // Viewport background fill pipeline (TriangleList, same shader as grid)
+    fill_pipeline: wgpu::RenderPipeline,
+    fill_vertex_buffer: wgpu::Buffer,
+
     // Glyphon text rendering
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -429,6 +433,64 @@ impl DepthTimelineWindow {
             cache: None,
         });
 
+        // ── Viewport background fill pipeline (same shader, TriangleList) ──
+        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Viewport Fill Pipeline"),
+            layout: Some(&grid_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &grid_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GridLineVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 8,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x4,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &grid_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // 6 vertices for a viewport-filling quad
+        let fill_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Viewport Fill Vertex Buffer"),
+            size: (6 * std::mem::size_of::<GridLineVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // ── Glyphon ──────────────────────────────────────────────────
         let font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
@@ -457,6 +519,8 @@ impl DepthTimelineWindow {
             grid_bind_group,
             grid_vertex_buffer,
             grid_vertex_count: 0,
+            fill_pipeline,
+            fill_vertex_buffer,
             font_system,
             swash_cache,
             text_atlas,
@@ -519,6 +583,24 @@ impl DepthTimelineWindow {
             &self.grid_uniform_buffer,
             0,
             bytemuck::cast_slice(&[grid_uniform]),
+        );
+
+        // Upload viewport background fill quad
+        let (vx, vy, vw, vh) = Self::viewport_rect(w, h);
+        let bg = self.palette.viewport_bg;
+        let bg_color = [bg[0], bg[1], bg[2], 1.0];
+        let fill_verts = [
+            GridLineVertex { position: [vx,      vy],      color: bg_color },
+            GridLineVertex { position: [vx,      vy + vh], color: bg_color },
+            GridLineVertex { position: [vx + vw, vy],      color: bg_color },
+            GridLineVertex { position: [vx + vw, vy],      color: bg_color },
+            GridLineVertex { position: [vx,      vy + vh], color: bg_color },
+            GridLineVertex { position: [vx + vw, vy + vh], color: bg_color },
+        ];
+        self.queue.write_buffer(
+            &self.fill_vertex_buffer,
+            0,
+            bytemuck::cast_slice(&fill_verts),
         );
 
         // Rebuild grid lines, border, and text labels
@@ -709,7 +791,13 @@ impl DepthTimelineWindow {
                 occlusion_query_set: None,
             });
 
-            // Grid lines + border first (behind bars)
+            // Viewport background fill (behind everything)
+            rp.set_pipeline(&self.fill_pipeline);
+            rp.set_bind_group(0, &self.grid_bind_group, &[]);
+            rp.set_vertex_buffer(0, self.fill_vertex_buffer.slice(..));
+            rp.draw(0..6, 0..1);
+
+            // Grid lines + border (behind bars)
             if self.grid_vertex_count > 0 {
                 rp.set_pipeline(&self.grid_pipeline);
                 rp.set_bind_group(0, &self.grid_bind_group, &[]);

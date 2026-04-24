@@ -23,3 +23,4 @@ Benchmark speed:
 cargo run --release --bin econsim
 ```
 
+O'Brian 10 avril, 9h30 am, 5e etage pavillon C, CHUM
