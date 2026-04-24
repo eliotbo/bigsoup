@@ -29,8 +29,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rand = "0.9"
-vizza = { path = "crates/vizza" }
-lod = { path = "crates/lod" }
+vizza = { path = "../bb/beta_breaker/crates/vizza" }
+lod = { path = "../bb/beta_breaker/crates/lod" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
 winit = "0.30"
